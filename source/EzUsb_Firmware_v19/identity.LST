@@ -1,0 +1,73 @@
+A51 MACRO ASSEMBLER  IDENTITY                                                             12/02/2011 17:04:14 PAGE     1
+
+
+MACRO ASSEMBLER A51 V8.01
+OBJECT MODULE PLACED IN identity.OBJ
+ASSEMBLER INVOKED BY: C:\Program Files\Keil\C51\BIN\A51.EXE identity.asm INCDIR(..\..\common_z8_ez) SET(SMALL) EP
+
+LOC  OBJ            LINE     SOURCE
+
+                       1     ;$include "..\..\common_z8_ez\identity_inc.asm"
+                       2     ;xdef FW_VERSION,FW_SUB_VERSION,HW_VERSION,HW_SUB_VERSION,MANUF_YEAR,MANUF_MONTH,SERIAL_4,S
+                             ERIAL_3,SERIAL_2,SERIAL_1,SERIAL_0
+                       3     ;$include (..\..\common_z8_ez\identity_inc.asm)
+  0001          +1     4     FW_VERSION              EQU     1
+  0009          +1     5     FW_SUB_VERSION  EQU             9
+  0002          +1     6     HW_VERSION              EQU             2
+  0000          +1     7     HW_SUB_VERSION  EQU             0
+  0006          +1     8     MANUF_YEAR              EQU             6
+  0003          +1     9     MANUF_MONTH             EQU             3
+  0003          +1    10     SERIAL_4                EQU             3       ; Manufactured serie
+  0000          +1    11     SERIAL_3                EQU             0       ; Unique serial number msb
+  0000          +1    12     SERIAL_2                EQU             0       ; Unique serial number 
+  0000          +1    13     SERIAL_1                EQU             0       ; Unique serial number 
+  0000          +1    14     SERIAL_0                EQU             0       ; Unique serial number lsb
+                +1    15     
+                +1    16     ;PUBLIC FW_VERSION,FW_SUB_VERSION,HW_VERSION,HW_SUB_VERSION,MANUF_YEAR,MANUF_MONTH,SERIAL_4
+                             ,SERIAL_3,SERIAL_2,SERIAL_1,SERIAL_0
+                +1    17     ;END
+                +1    18     
+                +1    19     ;?CO?IDENTITY(00080h)
+                +1    20     
+                      21     
+                      22     public identity
+                      23     
+                      24     
+                      25     
+                      26     ; V1.5 : In reality, serial number will start at 0x87 since the hex2bix tool from cypress w
+                             ill add 0x7 bytes at the begining of the eeprom
+                      27     
+----                  28     CSEG    AT 80H
+                      29     ;extrn FW_VERSION,FW_SUB_VERSION,HW_VERSION,HW_SUB_VERSION,MANUF_YEAR,MANUF_MONTH,SERIAL_4,
+                             SERIAL_3,SERIAL_2,SERIAL_1,SERIAL_0
+0080 01090200         30     identity: DB FW_VERSION,FW_SUB_VERSION,HW_VERSION,HW_SUB_VERSION,MANUF_YEAR,MANUF_MONTH,SER
+                             IAL_4,SERIAL_3,SERIAL_2,SERIAL_1,SERIAL_0
+0084 06030300                
+0088 000000                  
+                      31     END
+A51 MACRO ASSEMBLER  IDENTITY                                                             12/02/2011 17:04:14 PAGE     2
+
+SYMBOL TABLE LISTING
+------ ----- -------
+
+
+N A M E             T Y P E  V A L U E   ATTRIBUTES
+
+FW_SUB_VERSION . .  N NUMB   0009H   A   
+FW_VERSION . . . .  N NUMB   0001H   A   
+HW_SUB_VERSION . .  N NUMB   0000H   A   
+HW_VERSION . . . .  N NUMB   0002H   A   
+IDENTITY . . . . .  C ADDR   0080H   A   
+MANUF_MONTH. . . .  N NUMB   0003H   A   
+MANUF_YEAR . . . .  N NUMB   0006H   A   
+SERIAL_0 . . . . .  N NUMB   0000H   A   
+SERIAL_1 . . . . .  N NUMB   0000H   A   
+SERIAL_2 . . . . .  N NUMB   0000H   A   
+SERIAL_3 . . . . .  N NUMB   0000H   A   
+SERIAL_4 . . . . .  N NUMB   0003H   A   
+
+
+REGISTER BANK(S) USED: 0 
+
+
+ASSEMBLY COMPLETE.  0 WARNING(S), 0 ERROR(S)

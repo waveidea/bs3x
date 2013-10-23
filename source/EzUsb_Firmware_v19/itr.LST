@@ -1,0 +1,467 @@
+C51 COMPILER V8.15   ITR                                                                   12/02/2011 17:04:13 PAGE 1   
+
+
+C51 COMPILER V8.15, COMPILATION OF MODULE ITR
+OBJECT MODULE PLACED IN itr.OBJ
+COMPILER INVOKED BY: C:\Program Files\Keil\C51\BIN\C51.EXE itr.c OPTIMIZE(9,SPEED) INCDIR(C:\backup_jd\midictrl\BSP_VERS
+                    -ION_2\firmware\common_z8_ez\;..\..\common_z8_ez) DEFINE(EZ_COMPIL)
+
+line level    source
+
+   1          //#pragma NOIV  // Do not generate interrupt vectors 
+   2          
+   3          #include <ezusb.h>
+   4          #include <ezregs.h>
+   5          #include "pins_def.h"
+   6          #include "common_def.h"
+   7          #include <common_z8_ez.h>
+   8          #include "serial.h"
+   9          #include "itr.h"
+  10          #include "usb.h"
+  11          #include "bootloader.h"
+  12          #include "macros.inc"
+  13          #include "main.h" // V1.9
+  14          
+  15          // GLOBAL VARS
+  16          static unsigned char MIDI_In_From_Con_Current_Status;
+  17          static unsigned char MIDI_In_From_Con_Msg_Size;
+  18          
+  19          unsigned char timeout_cpt;
+  20          
+  21          // From SERIAL.C
+  22          extern idata unsigned char TX_To_Midi_Out_Con_Buff[SERIAL_TX_BUFF_LENGTH];
+  23          extern xdata unsigned char TX_To_Serial_Z8_Buff[SERIAL_TX_BUFF_LENGTH];                 // V1.8 idata
+  24          extern unsigned char tx_to_midi_out_con_start_index;
+  25          extern unsigned char tx_to_midi_out_con_end_index;
+  26          extern bit tx_to_midi_out_con_busy;
+  27          extern bit tx_to_midi_out_con_full;
+  28          extern unsigned char tx_to_serial_z8_start_index;
+  29          extern unsigned char tx_to_serial_z8_end_index;
+  30          extern bit tx_to_serial_z8_busy;
+  31          extern bit tx_to_serial_z8_full;
+  32          
+  33          // From MAIN.C
+  34          extern unsigned char bdata CTRL_REGS_7BITS_FROM_Z8[CTRL_REG_NB_FROM_Z8_TO_EZ];
+  35          extern volatile BYTE sync24_clear_clock_cpt;
+  36          extern volatile BYTE sync24_clear_cont_cpt;
+  37          extern xdata Midi_In_Struct     MIDI_In_From_Con, MIDI_In_From_Usb, Serial_In_From_Z8;
+  38          extern idata Midi_In_Realtime_Struct  MIDI_In_Realtime_From_Con, MIDI_In_Realtime_From_Usb, Realtime_From_
+             -Z8;
+  39          extern bit z8_board_fully_updated_from_ez0_bit;
+  40          extern bit realtime_source_int_z_ez1_bit;
+  41          extern bit realtime_source_ext_z_ez1_bit;
+  42          extern bit autotest_mode_z_ez1_bit;
+  43          extern bit sync24_state_z_ez0_bit; // V1.9
+  44          extern bit sync24_source_int_z_z_ez1_bit; // V1.9
+  45          
+  46          // FROM BOOTLOADER.C
+  47          extern volatile BYTE bootloader_state;
+  48          extern BYTE fw_bl_src;  // shared reg
+  49          
+  50          #pragma NOAREGS         // do not use absolute register symbols (ARx)
+  51                                                          // for functions called from interrupt routines.
+  52          
+  53          //#pragma REGISTERBANK(2); 
+C51 COMPILER V8.15   ITR                                                                   12/02/2011 17:04:13 PAGE 2   
+
+  54          
+  55          /* ******************************************************************** */
+  56          /* Routine: Check_Realtime_MIDI_Data_Received                                                   */
+  57          /* Process: a realtime MIDI event has been received from MIDI In Con or */
+  58          /*                      USB In, check if this data must be retransimted to Z8           */
+  59          /*                      Board (MIDI clock if LFO is ON and EXT sync), or must be        */
+  60          /*                      merged with no latency                                                                          */
+  61          /*                      Also treats incoming realtime events from Z8 board                      */
+  62          /* Inputs:      data_received                                                                                           */
+  63          /* Outputs:     None                                                                                                            */
+  64          /* ******************************************************************** */
+  65          //static 
+  66          void Check_Realtime_MIDI_Data_Received( unsigned char data_received, Midi_In_Realtime_Struct *midi_struct)
+             - reentrant
+  67          {
+  68   1              // ignore realtime events while bootloading 
+  69   1              if(bootloader_state) return;
+  70   1      
+  71   1              // treat sync24 immediately
+  72   1              if(sync24_state_z_ez0_bit) 
+  73   1                      generateSync24(data_received, midi_struct);
+  74   1      
+  75   1              // Store realtime data received to its buffer and update pointer index
+  76   1              midi_struct->realtime[midi_struct->realtime_end_index] = data_received;
+  77   1              midi_struct->realtime_end_index = (midi_struct->realtime_end_index + 1) & (MIDI_IN_REALTIME_BUFF_LENGHT-1
+             -);
+  78   1              if(midi_struct->realtime_start_index == midi_struct->realtime_end_index)
+  79   1              {
+  80   2                      // overflow on realtime buffer
+  81   2                      midi_struct->input_status |= realtime_overflow;
+  82   2              }
+  83   1      }
+  84          
+  85          // ***************************************************************************
+  86          // Routine      : Check_Midi_In_From_Con_Data_Received()
+  87          // Input        :  
+  88          // Output       : 
+  89          // Process      : 
+  90          // ***************************************************************************
+  91          //static
+  92          void Check_Midi_In_From_Con_Data_Received(unsigned char data_received)
+  93          {
+  94   1              // Check if incoming data is a REALTIME event
+  95   1              if(data_received > 0xF7)
+  96   1              {
+  97   2                      // check incoming realtime data received if realtime source is MIDI IN connector
+  98   2                      // if(!(CTRL_REGS_7BITS_FROM_Z8[CTRL_REG_1_7BITS_TO_EZ_INDEX] & realtime_source_z_ez1))
+  99   2                      //if(!realtime_source_int_z_ez1_bit)
+ 100   2                      if(!realtime_source_ext_z_ez1_bit)
+ 101   2                      {
+ 102   3                              Check_Realtime_MIDI_Data_Received(data_received, &MIDI_In_Realtime_From_Con);
+ 103   3                      }
+ 104   2              }
+ 105   1              else
+ 106   1              {
+ 107   2                      // Non realtime received, add it to MIDI_In_From_Con_Buffer
+ 108   2                      // Detect if status
+ 109   2                      if (data_received & MIDI_STATUS_MASK)
+ 110   2                      {
+ 111   3                              MIDI_In_From_Con_Msg_Size = Get_MIDI_Msg_Size(data_received);
+ 112   3                              
+ 113   3                              if (data_received == MIDI_SOX)
+C51 COMPILER V8.15   ITR                                                                   12/02/2011 17:04:13 PAGE 3   
+
+ 114   3                                      MIDI_In_From_Con.merger_state =  IN_SYSEX;
+ 115   3                      else
+ 116   3                              if (data_received == MIDI_EOX)
+ 117   3                              MIDI_In_From_Con.merger_state =  NORMAL; // Back to NORMAL after a SYSEX or FIFO_FULL
+ 118   3                      else
+ 119   3                              if (data_received <  0xF0)
+ 120   3                              {
+ 121   4                                      MIDI_In_From_Con.merger_state   = NORMAL;
+ 122   4                                      MIDI_In_From_Con_Current_Status = data_received ;       // Saves the current status
+ 123   4                              }
+ 124   3                      }
+ 125   2                      // Non-Status byte received
+ 126   2                      else
+ 127   2                      {
+ 128   3                              // wait to receive a MIDI status (only for init.)
+ 129   3                              // Exit and ignore received data until a status is received after boot
+ 130   3                              if (MIDI_In_From_Con.merger_state == WAIT_FOR_CORRECT_DATA)     return;
+ 131   3      
+ 132   3                              if (MIDI_In_From_Con.merger_state == NORMAL)
+ 133   3                              {
+ 134   4                                      if ( MIDI_In_From_Con.current_index == MIDI_In_From_Con.end_index)
+ 135   4                                      {
+ 136   5                                              // Get message size with the inserted current status
+ 137   5                                              MIDI_In_From_Con_Msg_Size  = Get_MIDI_Msg_Size(MIDI_In_From_Con_Current_Status); // -1; ???
+ 138   5      
+ 139   5                                              // Restores running status
+ 140   5                                      // Itr_function_param already contains Itr_Current_Status
+ 141   5                              MIDI_In_Add_Buffer(MIDI_In_From_Con_Current_Status, &MIDI_In_From_Con);
+ 142   5                                      }
+ 143   4                                      MIDI_In_From_Con_Msg_Size--;
+ 144   4                              }
+ 145   3                      } // end non status byte received
+ 146   2      
+ 147   2                      // Write byte received from MIDI In to MIDI IN Buffer
+ 148   2                      MIDI_In_Add_Buffer(data_received, &MIDI_In_From_Con);
+ 149   2      
+ 150   2                      if ( MIDI_In_From_Con_Msg_Size == 0 )
+ 151   2                      {
+ 152   3                              if (MIDI_In_From_Con.merger_state != FIFO_FULL)
+ 153   3                              // Set the MIDI_in_end_index pointer to enable transmission
+ 154   3                              MIDI_In_From_Con.end_index = MIDI_In_From_Con.current_index;
+ 155   3                              else
+ 156   3                              // Return to normal state after FIFO_FULL at the end of the message
+ 157   3                              MIDI_In_From_Con.merger_state     = NORMAL;
+ 158   3                      }
+ 159   2              } // end non realtime byte received
+ 160   1      }
+ 161          
+ 162          // ***************************************************************************
+ 163          // Routine      : Check_Serial_From_Z8_Data_Received()
+ 164          // Input        :  
+ 165          // Output       : 
+ 166          // Process      : Treat incoming serial from Z8 board
+ 167          // ***************************************************************************
+ 168          //static 
+ 169          void Check_Serial_From_Z8_Data_Received(unsigned char data_received)
+ 170          {
+ 171   1              // V1.4 if not bootloading then treat a normal z8 incoming data
+ 172   1              if(!bootloader_state) 
+ 173   1              {
+ 174   2                      // if we received a clock (internal sync) then must dispatch it to midi/usb out 1
+ 175   2                      if((data_received >= MIDI_CLOCK)&&(data_received <= MIDI_STOP))
+C51 COMPILER V8.15   ITR                                                                   12/02/2011 17:04:13 PAGE 4   
+
+ 176   2                      {
+ 177   3                              Check_Realtime_MIDI_Data_Received(data_received, &Realtime_From_Z8);
+ 178   3                              //v1.1
+ 179   3                              return;
+ 180   3                      }
+ 181   2              
+ 182   2                      // wait for the first valid frame
+ 183   2                      if(Serial_In_From_Z8.merger_state == WAIT_SOF)
+ 184   2                      {
+ 185   3                              // Still waiting for first valid frame
+ 186   3                              if(data_received != SOF_TO_EZ) return;
+ 187   3                              
+ 188   3                              // Start of frame received
+ 189   3                              Serial_In_From_Z8.merger_state = WAIT_EOF;
+ 190   3                      }
+ 191   2                      
+ 192   2                      // Do we have a full frame now ?
+ 193   2                      if (data_received == EOF_TO_EZ)
+ 194   2                      {
+ 195   3                              Serial_In_From_Z8.end_index = (Serial_In_From_Z8.current_index + 1) & (SERIAL_IN_FROM_Z8_BUFF_LENGHT-1)
+             -;                
+ 196   3                              Serial_In_From_Z8.merger_state = WAIT_SOF;
+ 197   3                      }
+ 198   2              }
+ 199   1              
+ 200   1              // Add received data to Z8 serial buffer
+ 201   1              MIDI_In_Add_Buffer(data_received, &Serial_In_From_Z8);
+ 202   1              
+ 203   1      }
+ 204          
+ 205          // ***************************************************************************
+ 206          // Routine      : Get_MIDI_Msg_Size()
+ 207          // Input        : current MIDI status 
+ 208          // Output       : number of expected bytes following the status (excluding SYSEX status)
+ 209          // Process      : 
+ 210          // ***************************************************************************
+ 211          //static 
+ 212          unsigned char Get_MIDI_Msg_Size(unsigned char status) reentrant
+ 213          {
+ 214   1              if ((status >= 0x80) && (status <= 0xEF))
+ 215   1              {
+ 216   2                      if ((status >= 0xC0) && (status <= 0xDF))
+ 217   2                              return(1);
+ 218   2                      else
+ 219   2                              return(2);
+ 220   2              }
+ 221   1          else
+ 222   1              if ((status==MIDI_TIME_CODE) || (status==MIDI_SONG_SELECTED))
+ 223   1                      return(1);
+ 224   1          else
+ 225   1              if (status==MIDI_SONG_POSITION_POINTER)
+ 226   1              return(2);
+ 227   1              else
+ 228   1              if (status==MIDI_SOX)
+ 229   1                      return(0xFF);
+ 230   1         else
+ 231   1                      return(0); // eox
+ 232   1      }
+ 233          
+ 234          // ***************************************************************************
+ 235          // Routine      : generateSync24()
+ 236          // Input        : 
+C51 COMPILER V8.15   ITR                                                                   12/02/2011 17:04:13 PAGE 5   
+
+ 237          // Output       : None
+ 238          // Process      : 
+ 239          // ***************************************************************************
+ 240          // V1.9 sync24 treated from itr (no more from main loop)
+ 241          void generateSync24(unsigned char data_in, Midi_In_Realtime_Struct *midi_struct) reentrant
+ 242          {
+ 243   1              // Realtime message comming from Internal sync ?
+ 244   1              if(midi_struct == &Realtime_From_Z8)
+ 245   1              {
+ 246   2                      // internal sync ?
+ 247   2                      if(!sync24_source_int_z_z_ez1_bit)      
+ 248   2                              Update_Sync24(data_in);         
+ 249   2              }
+ 250   1              else
+ 251   1              // Realtime messages comming from external 
+ 252   1              {
+ 253   2                      // external sync ?
+ 254   2                      if(sync24_source_int_z_z_ez1_bit)       
+ 255   2                              Update_Sync24(data_in);         
+ 256   2              }
+ 257   1      }
+ 258          
+ 259          // ***************************************************************************
+ 260          // Routine      : MIDI_In_Add_Buffer()
+ 261          // Input        : char to add to MIDI in buffer
+ 262          // Output       : None
+ 263          // Process      : Add data to MIDI In buffer and update circular pointer
+ 264          // ***************************************************************************
+ 265          //static 
+ 266          void MIDI_In_Add_Buffer(unsigned char data_in, Midi_In_Struct *midi_struct) reentrant
+ 267          {
+ 268   1              static unsigned char current_index_local_p1_one;
+ 269   1      
+ 270   1              //current_index_local = midi_struct->current_index;
+ 271   1              current_index_local_p1_one = (midi_struct->current_index+1)&(MIDI_IN_FROM_CON_BUFF_LENGHT-1);
+ 272   1      
+ 273   1              // Detects FIFO_IN FULL
+ 274   1              if (midi_struct->start_index == current_index_local_p1_one)
+ 275   1              {
+ 276   2                      midi_struct->input_status |=  input_overflow;
+ 277   2              midi_struct->merger_state = FIFO_FULL;
+ 278   2              // Skip current MIDI Msg: restore in_index with previous value
+ 279   2                  midi_struct->current_index = midi_struct->end_index;
+ 280   2              }
+ 281   1              else
+ 282   1              {
+ 283   2                      midi_struct->buffer[midi_struct->current_index] = data_in;
+ 284   2                      midi_struct->current_index = current_index_local_p1_one;
+ 285   2              }
+ 286   1      }
+ 287          
+ 288          #pragma AREGS
+ 289          
+ 290          /* ******************************************************************** */
+ 291          /* Routine: serial_port_0 ISR                                                                                   */
+ 292          /* Process: Send/Receive from RX0/TX0 (connectors)                                              */
+ 293          /* Inputs:      None                                                                                                            */
+ 294          /* Outputs:     None                                                                                                            */
+ 295          /* ******************************************************************** */
+ 296          void serial_port_0_isr (void) interrupt COM0_VECT using 2
+ 297          {
+ 298   1              static unsigned char data_received;
+C51 COMPILER V8.15   ITR                                                                   12/02/2011 17:04:13 PAGE 6   
+
+ 299   1      
+ 300   1              /* ********* Received data interrupt ******** */
+ 301   1              if (RI)
+ 302   1              {
+ 303   2                      // Now treat itr from serial port 0
+ 304   2                      data_received = SBUF0;          
+ 305   2                      // clear interupt flag
+ 306   2                      RI = 0;         
+ 307   2      
+ 308   2                      // treat incoming data only if bootloader is off or src bootloader is midi in 
+ 309   2                      // since the bl uses usb_in buffer for communicating with the host via midi
+ 310   2                      if(z8_board_fully_updated_from_ez0_bit)
+ 311   2                      {
+ 312   3                              if(fw_bl_src != FW_BL_SRC_USB_IN)
+ 313   3                                      // Treat incoming data received
+ 314   3                                      Check_Midi_In_From_Con_Data_Received(data_received);
+ 315   3                      }
+ 316   2              }
+ 317   1      
+ 318   1              /* ********* Transmited data interrupt ******** */
+ 319   1              if (TI)
+ 320   1              {
+ 321   2                      TI = 0;
+ 322   2                      if (tx_to_midi_out_con_start_index != tx_to_midi_out_con_end_index)
+ 323   2                      {
+ 324   3                              SBUF0 = TX_To_Midi_Out_Con_Buff[tx_to_midi_out_con_start_index++ & (SERIAL_TX_BUFF_LENGTH-1)];
+ 325   3                              tx_to_midi_out_con_full = FALSE;
+ 326   3                      }
+ 327   2                      else
+ 328   2                              tx_to_midi_out_con_busy = FALSE;
+ 329   2              }
+ 330   1      }
+ 331          
+ 332          /* ******************************************************************** */
+ 333          /* Routine: serial_port_1 ISR                                                                                   */
+ 334          /* Process: parse incoming from RX2/TX2 pin (sent from z8 board)                */
+ 335          /* Inputs:      None                                                                                                            */
+ 336          /* Outputs:     None                                                                                                            */
+ 337          /* Notes: This function uses the global var RX2_index                                   */
+ 338          /* ******************************************************************** */
+ 339          void serial_port_1_isr (void) interrupt COM1_VECT using 2
+ 340          {
+ 341   1              static unsigned char data_received;
+ 342   1      
+ 343   1              /* ********* Received data interrupt ******** */
+ 344   1              if (RI1)
+ 345   1              {
+ 346   2                      // Now treat itr from serial port 0
+ 347   2                      data_received = SBUF1;          
+ 348   2                      // clear interupt flag
+ 349   2                      RI1 = 0;                
+ 350   2      
+ 351   2                      // waiting for the bootloaded CRC from Z8 ?
+ 352   2                      //if(bootloader_state == VERIFY_Z8_CRC)
+ 353   2                              
+ 354   2                      //else
+ 355   2                      // ignore serial in from z8 when bootloading
+ 356   2                      // V1.4 if(!bootloader_state)
+ 357   2                              // Treat incoming data received
+ 358   2                              Check_Serial_From_Z8_Data_Received(data_received);
+ 359   2              }
+ 360   1      
+C51 COMPILER V8.15   ITR                                                                   12/02/2011 17:04:13 PAGE 7   
+
+ 361   1              /* ********* Transmited data interrupt ******** */
+ 362   1              if (TI1)
+ 363   1              {
+ 364   2                      TI1 = 0;
+ 365   2                              
+ 366   2                      if (tx_to_serial_z8_start_index != tx_to_serial_z8_end_index)
+ 367   2                      {
+ 368   3                              SBUF1 = TX_To_Serial_Z8_Buff[tx_to_serial_z8_start_index++ & (SERIAL_TX_BUFF_LENGTH-1)];
+ 369   3                              tx_to_serial_z8_full = FALSE;
+ 370   3                      }
+ 371   2                      else
+ 372   2                              tx_to_serial_z8_busy = FALSE;
+ 373   2              }
+ 374   1      }
+ 375          
+ 376          /* ******************************************************************** */
+ 377          /* Routine: timer_0_isr ISR                                                                                             */
+ 378          /* Process: timer 0 ISR (2 ms permanent timer)                                                  */
+ 379          /* Inputs:      None                                                                                                            */
+ 380          /* Outputs:     None                                                                                                            */
+ 381          /* Notes:                                                                                                                               */
+ 382          /* ******************************************************************** */
+ 383          void timer_0_isr (void) interrupt TMR0_VECT using 2 
+ 384          {
+ 385   1              TR0 = 0; // stop timer 0
+ 386   1      
+ 387   1              // V1.5 workaround for Rev D silicon chip : interupt timer bit must be cleared
+ 388   1      //      TF0 = 0;
+ 389   1      
+ 390   1              // execute only if not  bootloading since bootloader uses sync24_clear_clock_cpt
+ 391   1              // V1.5 also clear sync24 signals only if not in test mode
+ 392   1              if( (!bootloader_state) && (!autotest_mode_z_ez1_bit))
+ 393   1              {
+ 394   2                      // Update sync24 states if required
+ 395   2                      if(sync24_clear_clock_cpt)
+ 396   2                              if(!(--sync24_clear_clock_cpt))
+ 397   2                                      SYNC24_CLOCK_PORT_OUT  &=  ~SYNC24_CLOCK_PIN; // Set CLOCK = 0
+ 398   2              
+ 399   2                      if(sync24_clear_cont_cpt)
+ 400   2                              if(!(--sync24_clear_cont_cpt))
+ 401   2                                      SYNC24_CONT_PORT_OUT  &=  ~SYNC24_CONT_PIN; // Set CONT = 0
+ 402   2              }
+ 403   1              
+ 404   1              // decrease timeout counter if asserted
+ 405   1              // used for synch between ez and z8 board
+ 406   1              // then used for USB led persistency
+ 407   1              // if autotest mode : do not turn off the USB led
+ 408   1              // V1.4 if(!(CTRL_REGS_7BITS_FROM_Z8[CTRL_REG_1_7BITS_TO_EZ_INDEX] & autotest_mode_z_ez1_bit))
+ 409   1              if(!autotest_mode_z_ez1_bit)
+ 410   1              {
+ 411   2                      if(timeout_cpt) 
+ 412   2                      {       
+ 413   3                              timeout_cpt--;  
+ 414   3                              if(!timeout_cpt)
+ 415   3                                      USB_LED_PORT_OUT &= ~USB_LED_PIN;
+ 416   3                      }
+ 417   2              }       
+ 418   1      
+ 419   1              // reload and restart timer
+ 420   1          TH0  = (TIMER0_RELOAD >> 8);                // Setup reload value
+ 421   1          TL0  = (TIMER0_RELOAD & 0xFF);              // Setup overflow value
+ 422   1              TR0 = 1; // start Timer 0
+C51 COMPILER V8.15   ITR                                                                   12/02/2011 17:04:13 PAGE 8   
+
+ 423   1      }
+ 424          
+ 425          
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    847    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =      6       2
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

@@ -1,0 +1,24 @@
+signal void send_serial(void) {
+int i;
+
+for (i=0; i<19; i++ )
+{
+s1in=0xFF; 
+twatch (5000);          
+s1in=0x3C;
+twatch (5000);          
+s1in=0x03;
+twatch (5000);          
+s1in=0xB0;
+twatch (5000);          
+s1in=0x22;
+twatch (5000);          
+s1in=i;
+twatch (5000);          
+s1in=0xFE;
+twatch (5000); 
+}
+}
+/*
+
+*/

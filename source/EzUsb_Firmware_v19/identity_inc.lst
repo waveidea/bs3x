@@ -1,0 +1,54 @@
+A51 MACRO ASSEMBLER  IDENTITY_INC                                                         02/27/2007 10:06:44 PAGE     1
+
+
+MACRO ASSEMBLER A51 V8.00
+OBJECT MODULE PLACED IN .\identity_inc.obj
+ASSEMBLER INVOKED BY: C:\Keil\C51\BIN\A51.EXE ..\..\common_z8_ez\identity_inc.asm INCDIR(..\..\common_z8_ez) SET(SMALL) 
+                      PRINT(.\identity_inc.lst) OBJECT(.\identity_inc.obj) EP
+
+LOC  OBJ            LINE     SOURCE
+
+  0001                 1     FW_VERSION              EQU     1
+  0006                 2     FW_SUB_VERSION          EQU     6
+  0002                 3     HW_VERSION              EQU     2
+  0000                 4     HW_SUB_VERSION          EQU     0
+  0006                 5     MANUF_YEAR              EQU             6
+  0003                 6     MANUF_MONTH             EQU             3
+  0003                 7     SERIAL_4                EQU             3       ; Manufactured serie
+  0000                 8     SERIAL_3                EQU             0       ; Unique serial number msb
+  0000                 9     SERIAL_2                EQU             0       ; Unique serial number 
+  0000                10     SERIAL_1                EQU             0       ; Unique serial number 
+  0000                11     SERIAL_0                EQU             0       ; Unique serial number lsb
+                      12     
+                      13     ;PUBLIC FW_VERSION,FW_SUB_VERSION,HW_VERSION,HW_SUB_VERSION,MANUF_YEAR,MANUF_MONTH,SERIAL_4
+                             ,SERIAL_3,SERIAL_2,SERIAL_1,SERIAL_0
+                      14     ;END
+                      15     
+                      16     ;?CO?IDENTITY(00080h)
+                      17     
+*** WARNING #A41 IN 17 (..\..\common_z8_ez\identity_inc.asm, LINE 17): MISSING 'END' STATEMENT
+A51 MACRO ASSEMBLER  IDENTITY_INC                                                         02/27/2007 10:06:44 PAGE     2
+
+SYMBOL TABLE LISTING
+------ ----- -------
+
+
+N A M E             T Y P E  V A L U E   ATTRIBUTES
+
+FW_SUB_VERSION . .  N NUMB   0006H   A   
+FW_VERSION . . . .  N NUMB   0001H   A   
+HW_SUB_VERSION . .  N NUMB   0000H   A   
+HW_VERSION . . . .  N NUMB   0002H   A   
+MANUF_MONTH. . . .  N NUMB   0003H   A   
+MANUF_YEAR . . . .  N NUMB   0006H   A   
+SERIAL_0 . . . . .  N NUMB   0000H   A   
+SERIAL_1 . . . . .  N NUMB   0000H   A   
+SERIAL_2 . . . . .  N NUMB   0000H   A   
+SERIAL_3 . . . . .  N NUMB   0000H   A   
+SERIAL_4 . . . . .  N NUMB   0003H   A   
+
+
+REGISTER BANK(S) USED: 0 
+
+
+ASSEMBLY COMPLETE.  1 WARNING(S), 0 ERROR(S)

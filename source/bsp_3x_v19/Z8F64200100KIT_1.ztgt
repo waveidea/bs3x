@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Target name="Z8F64200100KIT_1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="target.tsd" xsi:type="Target">
+   <Clock>
+      <clockType>External</clockType>
+      <frequency>20000000</frequency>
+   </Clock>
+   <ExtFlash>
+      <device />
+      <externalAddress>0</externalAddress>
+      <manufacturer />
+      <units>0</units>
+      <usingExternal>false</usingExternal>
+      <usingInternal>true</usingInternal>
+   </ExtFlash>
+   <cpu>Z8F6423</cpu>
+   <schemaVersion>0.0.1</schemaVersion>
+   <version>1.00</version>
+</Target>

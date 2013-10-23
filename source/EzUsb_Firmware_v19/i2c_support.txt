@@ -1,0 +1,34 @@
+#define SERIAL_ADDR				0x50
+
+void TD_Init(void) 
+{
+	...
+	EZUSB_InitI2C();
+	..
+	I2C_Addr = SERIAL_ADDR | ((I2CS & 0x10) >> 4); // could be replaced by #define I2C_Addr 0x51 since I use a 24c64 ???
+}
+
+
+void EEPROMWriteByte(WORD addr, BYTE value)
+{
+	BYTE		i = 0;
+	BYTE xdata 	ee_str[3];
+
+	ee_str[i++] = MSB(addr);
+	ee_str[i++] = LSB(addr);
+	ee_str[i++] = value;
+
+	EZUSB_WriteI2C(I2C_Addr, i, ee_str);
+    EZUSB_WaitForEEPROMWrite(I2C_Addr);
+}
+
+
+void EEPROMWrite(WORD addr, BYTE length, BYTE xdata *buf)
+{
+	BYTE	i;
+	for(i=0;i<length;++i)
+		EEPROMWriteByte(addr++,buf[i]);
+}	
+
+
+

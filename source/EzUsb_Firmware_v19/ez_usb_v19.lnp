@@ -1,0 +1,16 @@
+"USBJmpTb.obj",
+"dscr.obj",
+"fw.obj",
+"hardware.obj",
+"itr.obj",
+"main.obj",
+"periph.obj",
+"serial.obj",
+"usb.obj",
+".\Ezusb.lib",
+"bootloader.obj",
+"identity.obj" 
+TO "ez_usb_v19" 
+RAMSIZE(256) 
+CODE( 0x0000-0x1D40 )
+XDATA( 0X2000-0X27FF )

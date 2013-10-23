@@ -1,0 +1,572 @@
+C51 COMPILER V8.15   USB                                                                   12/02/2011 17:04:13 PAGE 1   
+
+
+C51 COMPILER V8.15, COMPILATION OF MODULE USB
+OBJECT MODULE PLACED IN usb.OBJ
+COMPILER INVOKED BY: C:\Program Files\Keil\C51\BIN\C51.EXE usb.c OPTIMIZE(9,SPEED) INCDIR(C:\backup_jd\midictrl\BSP_VERS
+                    -ION_2\firmware\common_z8_ez\;..\..\common_z8_ez) DEFINE(EZ_COMPIL)
+
+line level    source
+
+   1          //#pragma NOIV  // Do not generate interrupt vectors
+   2           
+   3          #include <ezusb.h>
+   4          #include <ezregs.h>
+   5          #include "pins_def.h"
+   6          #include "common_def.h"
+   7          #include <common_z8_ez.h>
+   8          #include "usb.h"
+   9          #include "usb_defs.h"
+  10          #include "serial.h"
+  11          #include "itr.h"
+  12          #include "bootloader.h"
+  13          #include "hardware.h"
+  14          #include "fw.h"
+  15          #include "main.h" // V1.9
+  16          #include "macros.inc"
+  17          
+  18          
+  19          // Number of bytes which should be sent
+  20          BYTE code usb_midi_bytes_to_send[] = {
+  21                  0, // 0: invalid/reserved event
+  22                  0, // 1: invalid/reserved event
+  23                  2, // 2: two-byte system common messages like MTC, Song Select, etc.
+  24                  3, // 3: three-byte system common messages like SPP, etc.
+  25                  3, // 4: SysEx starts or continues
+  26                  1, // 5: Single-byte system common message or sysex sends with following single byte
+  27                  2, // 6: SysEx sends with following two bytes
+  28                  3, // 7: SysEx sends with following three bytes
+  29                  3, // 8: Note Off
+  30                  3, // 9: Note On
+  31                  3, // a: Poly-Key Press
+  32                  3, // b: Control Change
+  33                  2, // c: Program Change
+  34                  2, // d: Channel Pressure
+  35                  3, // e: PitchBend Change
+  36                  1, // f: single byte 
+  37          };
+  38          
+  39          // FROM FW.C
+  40          extern volatile BOOL    GotSUD;
+  41          extern volatile BOOL    Sleep;                                          // Sleep mode enable flag
+  42          extern BOOL                             Rwuen;
+  43          
+  44          // FROM MAIN.C
+  45          extern xdata Midi_In_Struct  MIDI_In_From_Usb;
+  46          extern unsigned char bdata CTRL_REGS_7BITS_TO_Z8[CTRL_REG_MAX_FROM_EZ_TO_Z8];
+  47          extern bit usb_state_from_ez0_bit;
+  48          extern bit usb_enumrated_from_ez0_bit;
+  49          extern bit z8_board_fully_updated_from_ez0_bit;
+  50          extern bit realtime_source_int_z_ez1_bit;
+  51          extern bit realtime_source_ext_z_ez1_bit;
+  52          extern idata Midi_In_Realtime_Struct  MIDI_In_Realtime_From_Usb;
+  53          extern xdata Midi_In_Struct Serial_In_From_Z8;
+  54          //extern WORD first_pass;       // V1.5
+C51 COMPILER V8.15   USB                                                                   12/02/2011 17:04:13 PAGE 2   
+
+  55          
+  56          
+  57          // FROM BOOTLOADER.C
+  58          extern volatile BYTE bootloader_state;
+  59          extern BYTE fw_bl_src;  // shared reg
+  60          
+  61          // FROM ITR.C
+  62          extern unsigned char timeout_cpt;
+  63          
+  64          // ***************************************************************************
+  65          // Routine      : Check_If_Usb_Attached()
+  66          // Input        : 
+  67          // Output       : yes/no
+  68          // Process      : also update usb led
+  69          // ***************************************************************************
+  70          void Check_If_Usb_Attached(void)
+  71          {
+  72   1              bit must_change_usb_state = FALSE;
+  73   1      
+  74   1              // V1.5
+  75   1      //      if(first_pass) return;
+  76   1      
+  77   1              // usb was NOT present
+  78   1              if(!usb_state_from_ez0_bit)
+  79   1              {
+  80   2                      // is the vusb present ?
+  81   2                      if(VUSB_PORT_IN & VUSB_PIN)
+  82   2                      {
+  83   3                              // reconnect the device
+  84   3                              USBCS &= ~bmDISCON;
+  85   3                              //V1.5 USBCS = 0x06; // reconnect
+  86   3                              // is the 3x enumerated ?
+  87   3                              if(usb_enumrated_from_ez0_bit)
+  88   3                                      must_change_usb_state = TRUE;   
+  89   3                      }
+  90   2              }
+  91   1              else
+  92   1              // the usb was present
+  93   1              {
+  94   2                      // is the vusb NOT present ?
+  95   2                      if(!(VUSB_PORT_IN & VUSB_PIN))
+  96   2                      {
+  97   3                              // disconnect the device
+  98   3                              USBCS |= bmDISCON;
+  99   3                              //V1.5USBCS = 0x0A; // disconnect
+ 100   3                              // the device is no more enumerated
+ 101   3                              usb_enumrated_from_ez0_bit = FALSE;
+ 102   3                              must_change_usb_state = TRUE;   
+ 103   3                      }
+ 104   2              }
+ 105   1      
+ 106   1              if(must_change_usb_state)
+ 107   1              {
+ 108   2                      // V1.5
+ 109   2      //              USB_LED_PORT_OUT |= USB_LED_PIN;
+ 110   2      
+ 111   2                      // send only if z8 ready to receive
+ 112   2                      if(z8_board_fully_updated_from_ez0_bit)
+ 113   2                      {
+ 114   3                              usb_state_from_ez0_bit = !usb_state_from_ez0_bit;
+ 115   3                              // send only if not in bootloader state
+ 116   3                              if(!bootloader_state)
+C51 COMPILER V8.15   USB                                                                   12/02/2011 17:04:13 PAGE 3   
+
+ 117   3                                      Send_Single_Framed_byte_To_Z8(/*v1.1 FRAME_IS_COMMON_PARAM,*/ CTRL_REG_0_7B_FROM_EZ_INDEX, CTRL_REGS_7
+             -BITS_TO_Z8[0]);
+ 118   3                      }
+ 119   2      
+ 120   2                      //V1.5 
+ 121   2      //              USB_LED_PORT_OUT &= ~USB_LED_PIN;
+ 122   2              }
+ 123   1      
+ 124   1      
+ 125   1      }
+ 126          
+ 127          /* ******************************************************************** */
+ 128          /* Routine: Create_Send_Realtime_USB_Frame_From_MIDI_Buffer                             */
+ 129          /* Process: Send a single realtime byte MIDI to USB bus                                 */
+ 130          /* Inputs:      None                                                                                                            */
+ 131          /* Outputs:     None                                                                                                            */
+ 132          /* ******************************************************************** */
+ 133          void Create_Send_Realtime_USB_Frame_From_MIDI_Buffer( unsigned char CN, unsigned char realtime_data)
+ 134          {
+ 135   1              // V1.5
+ 136   1              // if(first_pass) return;
+ 137   1      
+ 138   1              if((EPIO[USB_IN_ID].cntrl & bmEPBUSY))
+ 139   1                      return;
+ 140   1      
+ 141   1              // turn on USB led
+ 142   1      //      USB_LED_PORT_OUT |= USB_LED_PIN;
+ 143   1      //      timeout_cpt = USB_LED_PERSISTENCY;
+ 144   1      
+ 145   1              // Prepare header byte 0
+ 146   1              USB_IN_BUFFER[0] = ((CN << 4) & 0xF0) | (USB_SINGLE_BYTE & 0x0F);               
+ 147   1              USB_IN_BUFFER[1] = realtime_data;
+ 148   1              USB_IN_BUFFER[2] = 0;
+ 149   1              USB_IN_BUFFER[3] = 0;
+ 150   1      
+ 151   1              // Now send out to USB
+ 152   1              EPIO[USB_IN_ID].bytes = MIDI_USB_FRAME_LENGHT;
+ 153   1      
+ 154   1              // turn off USB led
+ 155   1      //      USB_LED_PORT_OUT &= ~USB_LED_PIN;
+ 156   1      }
+ 157          
+ 158          #pragma NOAREGS; 
+ 159          
+ 160          /* ******************************************************************** */
+ 161          /* Routine: Check_Usb                                                                                                   */
+ 162          /* Process:                                                                                                                     */
+ 163          /* Inputs:      None                                                                                                            */
+ 164          /* Outputs:     None                                                                                                            */
+ 165          /* ******************************************************************** */
+ 166          void Check_Usb(void)
+ 167          {
+ 168   1                      // V1.5
+ 169   1                      // if(first_pass) return;
+ 170   1      
+ 171   1                      if(GotSUD)                                      // Wait for SUDAV
+ 172   1                      {
+ 173   2                              SetupCommand();                 // Implement setup command
+ 174   2                              GotSUD = FALSE;                 // Clear SUDAV flag
+ 175   2                      }
+ 176   1      
+ 177   1                      // Poll User Device
+C51 COMPILER V8.15   USB                                                                   12/02/2011 17:04:13 PAGE 4   
+
+ 178   1                      // NOTE: Idle mode stops the processor clock.  There are only two
+ 179   1                      // ways out of idle mode, the WAKEUP pin, and detection of the USB
+ 180   1                      // resume state on the USB bus.  The timers will stop and the
+ 181   1                      // processor will not wake up on any other interrupts.
+ 182   1      
+ 183   1                      if (Sleep)
+ 184   1                  {
+ 185   2                              if(TD_Suspend())
+ 186   2                          { 
+ 187   3                              Sleep = FALSE;                          // Clear the "go to sleep" flag.  Do it here to prevent any race condition bet
+             -ween wakeup and the next sleep.
+ 188   3                              do
+ 189   3                              {
+ 190   4                                      EZUSB_Susp();                   // Place processor in idle mode.
+ 191   4                              }
+ 192   3                      while(!Rwuen && EZUSB_EXTWAKEUP());
+ 193   3                      // Must continue to go back into suspend if the host has disabled remote wakeup
+ 194   3                      // *and* the wakeup was caused by the external wakeup pin.
+ 195   3                      
+ 196   3                              // 8051 activity will resume here due to USB bus or Wakeup# pin activity.
+ 197   3                              EZUSB_Resume(); // If source is the Wakeup# pin, signal the host to Resume.             
+ 198   3                              TD_Resume();
+ 199   3                          }   
+ 200   2                  } // end if sleep
+ 201   1      }
+ 202          
+ 203          /* ******************************************************************** */
+ 204          /* Routine: Create_Send_USB_Frame_From_MIDI_Buffer                                              */
+ 205          /* Process: Treat each MIDI messages from MIDI buffer, encapsulate MIDI */
+ 206          /*                      into USB frames                                                                                         */
+ 207          /* Inputs:      None                                                                                                            */
+ 208          /* Outputs:     None                                                                                                            */
+ 209          /* ******************************************************************** */
+ 210          void Create_Send_USB_Frame_From_MIDI_Buffer( BYTE CN, Midi_In_Struct *midi_struct, BYTE end_index_local)
+ 211          {
+ 212   1              unsigned char /* buffer_length,*/ cin, start_index_local, end_sysex_index, mess_lenght, i;
+ 213   1              unsigned char usb_frame[MIDI_USB_FRAME_LENGHT];
+ 214   1              unsigned char status; // V1.7
+ 215   1      
+ 216   1              bit usb_out_in_sysex; //, must_skip_header_frame;
+ 217   1              BYTE usb_buffer_index;
+ 218   1              
+ 219   1              if(!usb_state_from_ez0_bit)
+ 220   1                      return;
+ 221   1      
+ 222   1              // V1.5
+ 223   1              // if(first_pass) return;
+ 224   1      
+ 225   1              usb_out_in_sysex        = FALSE;
+ 226   1              usb_buffer_index        = 0;
+ 227   1              start_index_local       = midi_struct->start_index;
+ 228   1      
+ 229   1              // Treat all bytes to send
+ 230   1              while(start_index_local != end_index_local)
+ 231   1              {
+ 232   2                      // turn on USB led
+ 233   2                      USB_LED_PORT_OUT |= USB_LED_PIN;
+ 234   2                      timeout_cpt = USB_LED_PERSISTENCY;
+ 235   2              
+ 236   2      //              must_skip_header_frame = FALSE;
+ 237   2      
+ 238   2                      // wait for the usb buffer to become ready
+C51 COMPILER V8.15   USB                                                                   12/02/2011 17:04:13 PAGE 5   
+
+ 239   2                      //if(!(EPIO[USB_IN_ID].cntrl & bmEPBUSY))
+ 240   2                      {
+ 241   3                              // Prepare header byte 0
+ 242   3                              usb_frame[0] = (CN << 4); // & 0xF0;            
+ 243   3              
+ 244   3                              // ignore frame header FF UU LL if NOT in sysex or if bootloading and sending from serial_in_from_z8
+ 245   3                              if( (!bootloader_state) && (!usb_out_in_sysex) && (midi_struct == &Serial_In_From_Z8) )
+ 246   3                              {
+ 247   4                              //      must_skip_header_frame = TRUE;
+ 248   4                                      // V1.4 in the case of a single midi string contains multiple MIDI events, the different midi
+ 249   4                                      // events are not seperated by FF UU LL : then do not skip these bytes since not present
+ 250   4                                      // the idea is to skip only if these bytes are found in the string
+ 251   4                                      if(midi_struct->buffer[start_index_local] == SOF_TO_EZ)
+ 252   4                                              start_index_local = (start_index_local + 3) & (MIDI_IN_FROM_CON_BUFF_LENGHT - 1);       
+ 253   4                              }
+ 254   3              
+ 255   3                              // Initialize USB frame buffer to zero to avoid eventual zero padding
+ 256   3                              usb_frame[1] = 0;
+ 257   3                              usb_frame[2] = 0;
+ 258   3                              usb_frame[3] = 0;
+ 259   3              
+ 260   3                              // Check if already in sysex ?
+ 261   3                              if(usb_out_in_sysex)
+ 262   3                              {
+ 263   4                                      // We are in sysex, check remaining sysex bytes to send
+ 264   4                                      usb_out_in_sysex = FALSE;
+ 265   4                                      // sysex_length contains remaining bytes of the long sysex to send
+ 266   4                                      // 1 byte remaining in SYSEX : it is F7
+ 267   4                                      if(mess_lenght == 1)
+ 268   4                                      {
+ 269   5                                              cin                      = USB_SYSEX_END_SINGLE & 0x0F;
+ 270   5                                              usb_frame[1]     = MIDI_EOX;
+ 271   5                                              start_index_local = (start_index_local + 1) & (MIDI_IN_FROM_CON_BUFF_LENGHT - 1);
+ 272   5                                      }
+ 273   4                                      else
+ 274   4                                      // sysex end with 2 or 3 bytes or into unfinished sysex
+ 275   4                                      {
+ 276   5                                              usb_frame[1] = midi_struct->buffer[start_index_local];
+ 277   5                                              
+ 278   5                                              // 2 Bytes remaining in SYSEX : it is DD F7
+ 279   5                                              if(mess_lenght == 2)
+ 280   5                                              {
+ 281   6                                                      cin                      = USB_SYSEX_END_TWO & 0x0F;
+ 282   6                                                      usb_frame[2]     = MIDI_EOX;
+ 283   6                                                      start_index_local = (start_index_local + 2) & (MIDI_IN_FROM_CON_BUFF_LENGHT - 1);
+ 284   6                                              }
+ 285   5                                              else 
+ 286   5                                              // sysex end with 3 bytes or into unfinished sysex
+ 287   5                                              {                                       
+ 288   6                                                      usb_frame[2] = midi_struct->buffer[(start_index_local+1) & (MIDI_IN_FROM_CON_BUFF_LENGHT - 1)];
+ 289   6                                                      usb_frame[3] = midi_struct->buffer[(start_index_local+2) & (MIDI_IN_FROM_CON_BUFF_LENGHT - 1)];
+ 290   6                                                      start_index_local = (start_index_local + 3) & (MIDI_IN_FROM_CON_BUFF_LENGHT - 1);
+ 291   6                      
+ 292   6                                                      if(mess_lenght==3)
+ 293   6                                                      {
+ 294   7                                                              cin = USB_SYSEX_END_TREE & 0x0F;
+ 295   7                                                      }
+ 296   6                                                      else // More than 3 remaining bytes were in sysex
+ 297   6                                                  {
+ 298   7                                                              cin = USB_SYSEX_START_IN & 0x0F;
+ 299   7                                                              usb_out_in_sysex = TRUE;
+ 300   7                                                      }
+C51 COMPILER V8.15   USB                                                                   12/02/2011 17:04:13 PAGE 6   
+
+ 301   6                                                      
+ 302   6                                                      mess_lenght -= 3; // 3 bytes of the long sysex have been sent
+ 303   6                                              }               
+ 304   5                                      }
+ 305   4                              } // end we already were in sysex
+ 306   3                              else
+ 307   3                              // Is it a START of SYSEX ?
+ 308   3                              if(midi_struct->buffer[start_index_local] == MIDI_SOX)
+ 309   3                              {
+ 310   4                                      usb_out_in_sysex = TRUE;
+ 311   4                                      usb_frame[1]     = MIDI_SOX;
+ 312   4                                      start_index_local = (start_index_local + 1) & (MIDI_IN_FROM_CON_BUFF_LENGHT - 1);
+ 313   4              
+ 314   4                                      // Search for end sysex index position F7
+ 315   4                                      end_sysex_index = start_index_local;
+ 316   4                                      mess_lenght    = 1;
+ 317   4                                      while( (midi_struct->buffer[end_sysex_index] != MIDI_EOX) && (end_sysex_index != end_index_local))
+ 318   4                                      {
+ 319   5                                                      if(++mess_lenght < MIDI_USB_FRAME_LENGHT)
+ 320   5                                                      {
+ 321   6                                                              usb_frame[mess_lenght] = midi_struct->buffer[end_sysex_index];
+ 322   6                                                              start_index_local = (start_index_local + 1) & (MIDI_IN_FROM_CON_BUFF_LENGHT - 1);
+ 323   6                                                      }
+ 324   5                                                      end_sysex_index = (end_sysex_index + 1) & (MIDI_IN_FROM_CON_BUFF_LENGHT - 1);
+ 325   5                                      }
+ 326   4                                      
+ 327   4                                      mess_lenght++;
+ 328   4      
+ 329   4                                      // Now end_sysex_index should contains position of EOX F7
+ 330   4                                      // Check if special case : 2 bytes sysex ?
+ 331   4                                      if(mess_lenght == 2)
+ 332   4                                      {
+ 333   5                                              cin                      = USB_SYSEX_END_TWO & 0x0F;
+ 334   5                                              usb_frame[2]     = MIDI_EOX;
+ 335   5                                              usb_out_in_sysex = FALSE;
+ 336   5                                      }
+ 337   4                                      else
+ 338   4                                      if(mess_lenght==3)
+ 339   4                                      {
+ 340   5                                              cin                      = USB_SYSEX_END_TREE & 0x0F;
+ 341   5                                              usb_frame[3]     = MIDI_EOX;
+ 342   5                                              usb_out_in_sysex = FALSE;
+ 343   5                                      }
+ 344   4                                      else
+ 345   4                                      {
+ 346   5                                              cin                      = USB_SYSEX_START_IN & 0x0F;
+ 347   5                                              //usb_out_in_sysex = TRUE;
+ 348   5                                              mess_lenght     -= 3; // 3 bytes of the long sysex have been sent
+ 349   5                                      }
+ 350   4                              } // end start_index is START_OF_SYSEX
+ 351   3                              else
+ 352   3                              // Not a start of sysex, Not in sysex, not an end of sysex
+ 353   3                              {
+ 354   4                                      status = midi_struct->buffer[start_index_local]; // V1.7
+ 355   4      
+ 356   4                                      // get midi mess lenght from status
+ 357   4                                      EA = 0;
+ 358   4                                      mess_lenght = Get_MIDI_Msg_Size(status) + 1;
+ 359   4                                      EA = 1;
+ 360   4                                      
+ 361   4                                      // V1.7 cin = midi_struct->buffer[start_index_local] >> 4;
+ 362   4                                      if( (status >= MIDI_NOTE_OFF) && (status < MIDI_SOX ))
+C51 COMPILER V8.15   USB                                                                   12/02/2011 17:04:13 PAGE 7   
+
+ 363   4                                              cin = status >> 4;
+ 364   4                                      else
+ 365   4                                              cin = mess_lenght;
+ 366   4                                      
+ 367   4                                      for(i=0; i < mess_lenght; i++)
+ 368   4                                      {
+ 369   5                                              usb_frame[i+1] = midi_struct->buffer[start_index_local];
+ 370   5                                              start_index_local = (start_index_local + 1) & (MIDI_IN_FROM_CON_BUFF_LENGHT - 1);
+ 371   5                                      }
+ 372   4                              }
+ 373   3              
+ 374   3                              // add cin to usb first byte
+ 375   3                              usb_frame[0] |= cin; 
+ 376   3              
+ 377   3                              // assign local usb buffer to real usb buffer
+ 378   3                              for(i=0; i < MIDI_USB_FRAME_LENGHT; i++)
+ 379   3                                       // USB_IN_BUFFER[i] = usb_frame[i];
+ 380   3                                      USB_IN_BUFFER[i + usb_buffer_index] = usb_frame[i];                             
+ 381   3              
+ 382   3                              usb_buffer_index += MIDI_USB_FRAME_LENGHT;
+ 383   3      
+ 384   3                              Check_Usb();
+ 385   3      
+ 386   3                              // buffer full ? send and reset index
+ 387   3                              if(usb_buffer_index >= USB_EP_BUFFER_LENGHT)
+ 388   3                              {
+ 389   4                                      if(!(EPIO[USB_IN_ID].cntrl & bmEPBUSY))
+ 390   4                                              // send buffer to usb out
+ 391   4              //                              EPIO[USB_IN_ID].bytes = MIDI_USB_FRAME_LENGHT;
+ 392   4                                              EPIO[USB_IN_ID].bytes = usb_buffer_index;
+ 393   4                                      usb_buffer_index = 0;
+ 394   4                              }
+ 395   3      
+ 396   3                              // ignore frame header EOF (FE)
+ 397   3                              if( (!bootloader_state) && (!usb_out_in_sysex) && (midi_struct == &Serial_In_From_Z8))
+ 398   3                              //if(must_skip_header_frame)
+ 399   3                                      // V1.4 in the case of a single midi string contains multiple MIDI events, the different midi
+ 400   3                                      // events are not seperated by FF UU LL : then do not skip these bytes since not present
+ 401   3                                      // the idea is to skip only if these bytes are found in the string
+ 402   3                                      if(midi_struct->buffer[start_index_local] == EOF_TO_EZ)
+ 403   3                                              start_index_local = (start_index_local + 1) & (MIDI_IN_FROM_CON_BUFF_LENGHT - 1);       
+ 404   3      
+ 405   3                      } // en endpoint was not busy
+ 406   2      
+ 407   2                      // turn off USB led
+ 408   2                      //USB_LED_PORT_OUT &= ~USB_LED_PIN; 
+ 409   2      
+ 410   2                  // V1.9 Check both MIDI in and USB in realtime buffers 
+ 411   2                      //Check_Realtime();
+ 412   2       
+ 413   2              } // end while
+ 414   1      
+ 415   1              // remaining bytes in the buffer ?
+ 416   1              if(usb_buffer_index)
+ 417   1              {
+ 418   2                      if(!(EPIO[USB_IN_ID].cntrl & bmEPBUSY))
+ 419   2                              // send buffer to usb out
+ 420   2                              EPIO[USB_IN_ID].bytes = usb_buffer_index;
+ 421   2              }       
+ 422   1      }
+ 423          
+ 424          // ******************************************************************** 
+C51 COMPILER V8.15   USB                                                                   12/02/2011 17:04:13 PAGE 8   
+
+ 425          // Routine: ISR_Ep2out ISR                                                                                              
+ 426          // Process:                                                                                                                     
+ 427          // Inputs:      None                                                                                                            
+ 428          // Outputs:     None                                                                                                            
+ 429          // ******************************************************************** 
+ 430          void Ep2out_Function(void)
+ 431          { 
+ 432   1              unsigned char cin, frame, index, n, nb_bytes;
+ 433   1      
+ 434   1              // V1.5
+ 435   1              // if(first_pass) return;
+ 436   1      
+ 437   1              // treat incoming data only if bootloader is off or src bootloader is usb in 
+ 438   1              // since the bl uses midi _in buffer for communicating with the host via usb
+ 439   1              if(usb_state_from_ez0_bit)
+ 440   1              if(z8_board_fully_updated_from_ez0_bit)
+ 441   1              if(fw_bl_src != FW_BL_SRC_MIDI_IN)
+ 442   1              {
+ 443   2                      // Is there something in the OUT2BUF buffer? Store it to usb buffer
+ 444   2                      if(     !(EPIO[OUT2BUF_ID].cntrl & bmEPBUSY) && (n = EPIO[OUT2BUF_ID].bytes) )
+ 445   2                      {
+ 446   3                              // turn on USB led
+ 447   3                              USB_LED_PORT_OUT |= USB_LED_PIN;
+ 448   3                              timeout_cpt = USB_LED_PERSISTENCY;
+ 449   3      
+ 450   3                              // frame is the base address of each new midi frame (0, 4, ..)
+ 451   3                              //frame=0;
+ 452   3                              for(frame=0; frame < n; frame=frame + MIDI_USB_FRAME_LENGHT)
+ 453   3                              //while(frame < n)
+ 454   3                              {
+ 455   4                              // Get CIN
+ 456   4                              cin = OUT2BUF[frame] & 0x0F;
+ 457   4      
+ 458   4                                      // V1.9 workaround XP : always receive 64 bytes !
+ 459   4                                      if(cin == 0) break;
+ 460   4      
+ 461   4                                      // consider only data In on cable nb 0
+ 462   4                                      if( (OUT2BUF[frame] >> 4) == CN0)
+ 463   4                                      {
+ 464   5                                      // Get message length V1.9
+ 465   5                                      nb_bytes  = usb_midi_bytes_to_send[cin];
+ 466   5      
+ 467   5                                              // invalid ? V1.9
+ 468   5                              if(nb_bytes == 0) continue; 
+ 469   5                      
+ 470   5                                              // Check if realtime, update realtime register and exit
+ 471   5                                      // V1.9 if(cin == (USB_SINGLE_BYTE & 0x0F))
+ 472   5                                              if(cin == 0x0F) // V1.9
+ 473   5                                              {
+ 474   6                                                      // check incoming realtime data received if realtime source is USB IN
+ 475   6                                                      // if(!realtime_source_int_z_ez1_bit)
+ 476   6                                                              if(realtime_source_ext_z_ez1_bit)
+ 477   6                                                              {
+ 478   7                                                                      EA = 0;
+ 479   7                                                                      Check_Realtime_MIDI_Data_Received(OUT2BUF[frame+1], &MIDI_In_Realtime_From_Usb);
+ 480   7                                                                      EA = 1;
+ 481   7                                                              }
+ 482   6                                              }
+ 483   5                                      else // Non realtime message
+ 484   5                                      {
+ 485   6                                              // Get message length  V1.9
+ 486   6                                              //nb_bytes  = usb_midi_bytes_to_send[cin];
+C51 COMPILER V8.15   USB                                                                   12/02/2011 17:04:13 PAGE 9   
+
+ 487   6                                                      // add all other message bytes
+ 488   6                                                      
+ 489   6                                                      //DBG
+ 490   6                                                      //Send_To_Midi_Out_Con(0xF0);
+ 491   6      
+ 492   6                                              for(index=0; index < nb_bytes ; index++)
+ 493   6                                                      {
+ 494   7                                                              //DBG
+ 495   7                                                              //Send_To_Midi_Out_Con(OUT2BUF[index+frame+1] >> 4);
+ 496   7                                                              //Send_To_Midi_Out_Con(OUT2BUF[index+frame+1] & 0x0F);
+ 497   7                                              EA = 0;
+ 498   7                                                              // add data to midi_in_from_usb_buff
+ 499   7                                              MIDI_In_Add_Buffer(OUT2BUF[index+frame+1], &MIDI_In_From_Usb);
+ 500   7      
+ 501   7                                                              EA = 1;
+ 502   7                                                      }
+ 503   6      
+ 504   6                                                      //DBG
+ 505   6                                                      //Send_To_Midi_Out_Con(0xF7);
+ 506   6              
+ 507   6                                              // Check if message is complete OR if we are in a sysex
+ 508   6                                                      // V1.9 if(nb_bytes)
+ 509   6                                                      if(cin != (USB_SYSEX_START_IN & 0x0F))
+ 510   6                                                      // Set the end_index pointer to enable transmission
+ 511   6                                                      MIDI_In_From_Usb.end_index = MIDI_In_From_Usb.current_index;
+ 512   6                                              
+ 513   6                                              } // end non realtime
+ 514   5                                      } // end data was on CN0
+ 515   4                                      
+ 516   4                                      //frame += MIDI_USB_FRAME_LENGHT;
+ 517   4                              
+ 518   4                      } // enfor frame
+ 519   3      
+ 520   3                              // Arm the OUT so it can receive the next packet
+ 521   3                              EPIO[OUT2BUF_ID].bytes = 0;
+ 522   3      
+ 523   3                              // turn off USB led
+ 524   3                              //USB_LED_PORT_OUT &= ~USB_LED_PIN;     
+ 525   3                      
+ 526   3                      } // end if usb buffer contains data
+ 527   2              } // end bootloader source buffer is not midi in connector
+ 528   1      }
+ 529          
+ 530          #pragma AREGS
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    928    ----
+   CONSTANT SIZE    =     16    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----      20
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----       2
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

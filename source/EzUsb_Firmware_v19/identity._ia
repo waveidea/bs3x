@@ -1,0 +1,1 @@
+"identity.asm" INCDIR(..\..\common_z8_ez) SET (SMALL) EP

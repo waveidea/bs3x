@@ -1,0 +1,467 @@
+C51 COMPILER V8.15   MAIN                                                                  12/02/2011 17:04:13 PAGE 1   
+
+
+C51 COMPILER V8.15, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN main.OBJ
+COMPILER INVOKED BY: C:\Program Files\Keil\C51\BIN\C51.EXE main.c OPTIMIZE(9,SPEED) INCDIR(C:\backup_jd\midictrl\BSP_VER
+                    -SION_2\firmware\common_z8_ez\;..\..\common_z8_ez) DEFINE(EZ_COMPIL)
+
+line level    source
+
+   1          //#pragma NOIV  // Do not generate interrupt vectors 
+   2          
+   3          #include <ezusb.h>
+   4          #include <ezregs.h>
+   5          #include "pins_def.h"
+   6          #include "common_def.h"
+   7          #include <common_z8_ez.h>
+   8          #include "main.h"
+   9          #include "usb.h"
+  10          #include "macros.inc"
+  11          #include "serial.h"
+  12          #include "bootloader.h"  // V1.9
+  13          
+  14          ///////////////////// GLOBAL VARS ///////////////////////////////////////
+  15          
+  16          // CTRL_REGS_7BITS_TO_Z8 must be sent to Z8 board when updated
+  17          unsigned char bdata CTRL_REGS_7BITS_TO_Z8[CTRL_REG_MAX_FROM_EZ_TO_Z8];
+  18          // bit 7 is always 0 since sent to Z8
+  19          // the following bits def MUST be duplicated in common_z8_ez.h file
+  20                  sbit usb_state_from_ez0_bit                                     = usb_state_from_ez0;   // DO NOT CHANGE ORDER
+  21                  sbit z8_board_fully_updated_from_ez0_bit        = z8_board_fully_updated_from_ez0;      
+  22                  sbit must_start_bootloader_from_ez0_bit         = must_start_bootloader_from_ez0;
+  23                  sbit usb_enumrated_from_ez0_bit                         = usb_enumrated_from_ez0;
+  24          
+  25          // Registers updated from the Z8 board (7 bits wide)
+  26          unsigned char bdata CTRL_REGS_7BITS_FROM_Z8[CTRL_REG_NB_FROM_Z8_TO_EZ];
+  27                  sbit filter_state_z_ez0_bit                     = filter_state_z_ez0;
+  28                  sbit sync24_state_z_ez0_bit                     = sync24_state_z_ez0;
+  29                  sbit filter_type_z_ez0_bit                              = filter_type_z_ez0;
+  30                  sbit merger_src_midi_in_state_z_ez0_bit = merger_src_midi_in_state_z_ez0;
+  31                  sbit merger_src_usb_in_state_z_ez0_bit  = merger_src_usb_in_state_z_ez0;
+  32                  sbit merger_dst_usb_out_state_z_ez0_bit = merger_dst_usb_out_state_z_ez0;
+  33                  sbit merger_dst_out1_state_z_ez0_bit    = merger_dst_out1_state_z_ez0;
+  34          
+  35                  sbit sync24_source_int_z_z_ez1_bit              = sync24_source_int_z_z_ez1;
+  36          //V1.5  sbit sync24_source_ext_z_z_ez1_bit              = sync24_source_ext_z_z_ez1;
+  37          //V1.5  sbit arpp_state_z_ez1_bit                       = arpp_state_z_ez1;
+  38                  sbit ez_fw_midi_to_z8_z_ez1_bit                 = ez_fw_midi_to_z8_z_ez1;
+  39                  sbit arpp_midi_src_z_ez1_bit                    = arpp_midi_src_z_ez1;
+  40                  sbit autotest_mode_z_ez1_bit                    = autotest_mode_z_ez1;
+  41                  sbit realtime_source_int_z_ez1_bit              = realtime_source_int_z_ez1;
+  42                  sbit realtime_source_ext_z_ez1_bit              = realtime_source_ext_z_ez1;
+  43          
+  44          // sync24 counters to clear lines : also shared with bootloader registers
+  45          volatile BYTE sync24_clear_clock_cpt;
+  46          volatile BYTE sync24_clear_cont_cpt;
+  47          
+  48          xdata Midi_In_Struct MIDI_In_From_Con, MIDI_In_From_Usb, Serial_In_From_Z8;
+  49          idata Midi_In_Realtime_Struct MIDI_In_Realtime_From_Con, MIDI_In_Realtime_From_Usb, Realtime_From_Z8;
+  50          
+  51          extern volatile BYTE bootloader_state; // V1.9
+  52          
+  53          // ***************************************************************************
+  54          // Routine      : Check_Midi_In_Buffer()
+C51 COMPILER V8.15   MAIN                                                                  12/02/2011 17:04:13 PAGE 2   
+
+  55          // Input        : 
+  56          // Output       : None
+  57          // Process      : There are "pure" midi data in the buffer
+  58          // ***************************************************************************
+  59          void Check_Midi_In_Buffer(Midi_In_Struct *midi_struct, bit merger_src_enable)
+  60          {
+  61   1              BYTE Start_Index_LOCAL;
+  62   1              BYTE End_Index_LOCAL;
+  63   1      
+  64   1              Start_Index_LOCAL = midi_struct->start_index;
+  65   1              EA = 0;
+  66   1              End_Index_LOCAL   = midi_struct->end_index;
+  67   1              EA = 1;
+  68   1      
+  69   1              // Check if something must be sent to Z8 Board (WID sysex or pure midi if arpeggio on)
+  70   1              Check_MIDI_Buff_Send_To_Z8_Board(midi_struct, End_Index_LOCAL);
+  71   1      
+  72   1              // Check if current MIDI In buffer has to be merged
+  73   1              if(merger_src_enable)
+  74   1              {
+  75   2                      // merge only if midi filter is off OR midi filter realtime only is on 
+  76   2                      if( (!filter_state_z_ez0_bit) || (!filter_type_z_ez0_bit) )
+  77   2                      {
+  78   3                              // Merge to MIDI out 1 ?
+  79   3                              if(merger_dst_out1_state_z_ez0_bit)
+  80   3                              {
+  81   4                                      // Merge to USB out CN0 ?
+  82   4                                      if(merger_dst_usb_out_state_z_ez0_bit)
+  83   4                                                      Create_Send_USB_Frame_From_MIDI_Buffer(CN0, midi_struct, End_Index_LOCAL);
+  84   4                      
+  85   4                                      // Send all bytes to MIDI Out Connector
+  86   4                                      while (Start_Index_LOCAL != End_Index_LOCAL)
+  87   4                                      {
+  88   5                                              Send_To_Midi_Out_Con(midi_struct->buffer[Start_Index_LOCAL]);
+  89   5                                              Start_Index_LOCAL = (Start_Index_LOCAL + 1) & (MIDI_IN_FROM_CON_BUFF_LENGHT -1);
+  90   5                                      }
+  91   4                              } // end merge to midi out con 
+  92   3              
+  93   3                      } // end midi filter allows merge
+  94   2              } // end merger is on
+  95   1      
+  96   1              // Update treated pointers
+  97   1              midi_struct->start_index = End_Index_LOCAL;
+  98   1      }
+  99          
+ 100          // ***************************************************************************
+ 101          // Routine      : Check_Serial_In_From_Z8_Buffer()
+ 102          // Input        : 
+ 103          // Output       : None
+ 104          // Process      : this buffer contains midi data + other registers [all framed]
+ 105          // ***************************************************************************
+ 106          void Check_Serial_In_From_Z8_Buffer(void)
+ 107          {
+ 108   1              BYTE Start_Index_LOCAL;
+ 109   1              BYTE End_Index_LOCAL_minus_one, End_Index_LOCAL;
+ 110   1              BYTE frame_status, frame_type;
+ 111   1      //      BYTE data_local; // V1.6
+ 112   1      
+ 113   1              Start_Index_LOCAL = Serial_In_From_Z8.start_index;
+ 114   1      
+ 115   1              // v1.1 assign end index - 1 to a local variable
+ 116   1              EA = 0;
+C51 COMPILER V8.15   MAIN                                                                  12/02/2011 17:04:13 PAGE 3   
+
+ 117   1              End_Index_LOCAL                         =  Serial_In_From_Z8.end_index;
+ 118   1              EA = 1;
+ 119   1              End_Index_LOCAL_minus_one       = (End_Index_LOCAL - 1)&(SERIAL_IN_FROM_Z8_BUFF_LENGHT-1);
+ 120   1      
+ 121   1              // Detect if there is a valid frame into the buffer
+ 122   1              //v1.1 while(Start_Index_LOCAL != Serial_In_From_Z8.end_index)
+ 123   1              while(Start_Index_LOCAL != End_Index_LOCAL)
+ 124   1              {
+ 125   2                      // assign end index - 1 to a local variable
+ 126   2      //              EA = 0;
+ 127   2      //v1.1  End_Index_LOCAL                         =  Serial_In_From_Z8.end_index;
+ 128   2      //v1.1  End_Index_LOCAL_minus_one       = (End_Index_LOCAL - 1)&(SERIAL_IN_FROM_Z8_BUFF_LENGHT-1);
+ 129   2      //              EA = 1;
+ 130   2                      // Check valid frame is present (if SOF and EOF are presents)
+ 131   2                      if(Serial_In_From_Z8.buffer[Start_Index_LOCAL]         == SOF_TO_EZ)
+ 132   2                      // if(Serial_In_From_Z8.buffer[(End_Index_LOCAL_minus_one-1)&(SERIAL_IN_FROM_Z8_BUFF_LENGHT-1)] == EOF_T
+             -O_EZ)
+ 133   2                      if(Serial_In_From_Z8.buffer[End_Index_LOCAL_minus_one] == EOF_TO_EZ)
+ 134   2                      {
+ 135   3                              // Detect here which frame type has been received
+ 136   3                              frame_status  = Serial_In_From_Z8.buffer[(Start_Index_LOCAL + 1)&(SERIAL_IN_FROM_Z8_BUFF_LENGHT-1)];
+ 137   3                              frame_type = frame_status & FRAME_FROM_Z8_TO_EZ_TYPE_MSK;
+ 138   3                              ///////////////////////////////////// NEW CONTROL REG RECEIVED /////////////////////////
+ 139   3                              ///// 0xFF 0b000rrrrr 0b0vvvvvvv 0xFE (r=reg select 0-31) (v=reg value 0-127) //////////
+ 140   3                              ////////////////////////////////////////////////////////////////////////////////////////
+ 141   3                              if(frame_type == FRAME_TO_EZ_IS_CTRL_REG)
+ 142   3                              {
+ 143   4                                      // here we received a new control reg from Z8 board
+ 144   4                                      // data_local = Serial_In_From_Z8.buffer[(Start_Index_LOCAL + 2)&(SERIAL_IN_FROM_Z8_BUFF_LENGHT-1)]; /
+             -/ V1.6 
+ 145   4                                      
+ 146   4                                      // Bits 4-0 are the control reg address to update
+ 147   4                                      // CTRL_REGS_7BITS_FROM_Z8[(frame_status & CTRL_REG_Z8_TO_EZ_ADDR_MSK)] = data_local; // V1.6 Serial_I
+             -n_From_Z8.buffer[(Start_Index_LOCAL + 2)&(SERIAL_IN_FROM_Z8_BUFF_LENGHT-1)];
+ 148   4                                      CTRL_REGS_7BITS_FROM_Z8[(frame_status & CTRL_REG_Z8_TO_EZ_ADDR_MSK)] = Serial_In_From_Z8.buffer[(Start
+             -_Index_LOCAL + 2)&(SERIAL_IN_FROM_Z8_BUFF_LENGHT-1)];
+ 149   4      
+ 150   4                                      // V1.6 each time the last control reg to ez is received then send sync back to Z8
+ 151   4                                      // This is used when the Z8 is in factory default, Sync to EZ occurs later and the Z8 still need to re
+             -ceive
+ 152   4                                      // registers from EZ 
+ 153   4      /*                              if( (frame_status & CTRL_REG_Z8_TO_EZ_ADDR_MSK) == LAST_CTRL_REG_7BITS_TO_EZ_INDEX)
+ 154   4                                      if( data_local == EZ_FULLY_UPDATED)
+ 155   4                                      {
+ 156   4                                              Send_Single_Framed_byte_To_Z8(CTRL_REG_0_7B_FROM_EZ_INDEX, (CTRL_REGS_7BITS_TO_Z8[0] | (1<<z8_board_f
+             -ully_updated_from_ez0_bit_pos)));
+ 157   4                                              // z8_board_fully_updated_from_ez0_bit = 1;
+ 158   4                                      }
+ 159   4      */
+ 160   4                                      // V1.4 If autotest mode is active then turn on the USB led
+ 161   4                                      if(autotest_mode_z_ez1_bit) USB_LED_PORT_OUT |= USB_LED_PIN;
+ 162   4      
+ 163   4                                      // update start index
+ 164   4                                      Start_Index_LOCAL =  (Start_Index_LOCAL + CTRL_REG_Z8_FRAME_LENGHT) & (SERIAL_IN_FROM_Z8_BUFF_LENGHT -
+             -1 );
+ 165   4                              } // end we received a control reg
+ 166   3                              else
+ 167   3                              ///////////////////////////////////// NEW MIDI FRAME RECEIVED /////////////////////////
+ 168   3                              ///// 0xFF 0b001u12xx 0b0lllllll vv vv vv vv 0xFE (u=usb out en, 1/2=midi out1/2 en
+ 169   3                              ///// lllll = midi message lenght / vv = midi mess bytes
+ 170   3                              ////////////////////////////////////////////////////////////////////////////////////////
+ 171   3                              if(frame_type == FRAME_TO_EZ_IS_MIDI)
+C51 COMPILER V8.15   MAIN                                                                  12/02/2011 17:04:13 PAGE 4   
+
+ 172   3                              {
+ 173   4                                      // decode where to send this midi message from Z8 (out1, usb1, usb2)
+ 174   4                                      // Need to send to midi out 0 ?
+ 175   4                                      if(frame_status & send_to_out1)
+ 176   4                                      {
+ 177   5                                              // need to send to usb out 1 ?
+ 178   5                                              if(frame_status & send_to_usb) 
+ 179   5                                                      Create_Send_USB_Frame_From_MIDI_Buffer(CN0, &Serial_In_From_Z8, End_Index_LOCAL);
+ 180   5      
+ 181   5                                              // Send all bytes to MIDI Out Connector
+ 182   5                                              //Start_Index_LOCAL =  (Start_Index_LOCAL + 3) & (SERIAL_IN_FROM_Z8_BUFF_LENGHT - 1);
+ 183   5                                              while (Start_Index_LOCAL != End_Index_LOCAL)
+ 184   5                                              {
+ 185   6                                                      // V1.9 Check both MIDI in and USB in realtime buffers 
+ 186   6                                                      //Check_Realtime();
+ 187   6      
+ 188   6                                                      // need to skip sof from z8 board ?
+ 189   6                                                      if(Serial_In_From_Z8.buffer[Start_Index_LOCAL] == SOF_TO_EZ)
+ 190   6                                                              Start_Index_LOCAL =  (Start_Index_LOCAL + 3) & (SERIAL_IN_FROM_Z8_BUFF_LENGHT - 1);
+ 191   6                                                      // send midi data to out connector
+ 192   6                                                      Send_To_Midi_Out_Con(Serial_In_From_Z8.buffer[Start_Index_LOCAL]);
+ 193   6                                                      // increase index
+ 194   6                                                      Start_Index_LOCAL =  (Start_Index_LOCAL + 1) & (SERIAL_IN_FROM_Z8_BUFF_LENGHT - 1);
+ 195   6                                                      // need to skip eof from z8 board ?
+ 196   6                                                      if(Serial_In_From_Z8.buffer[Start_Index_LOCAL] == EOF_TO_EZ)
+ 197   6                                                              Start_Index_LOCAL =  (Start_Index_LOCAL + 1) & (SERIAL_IN_FROM_Z8_BUFF_LENGHT - 1);
+ 198   6                                              }
+ 199   5                                      }
+ 200   4      
+ 201   4                                      // Check both MIDI in and USB in realtime buffers 
+ 202   4                                      Check_Realtime();
+ 203   4      
+ 204   4                                      // send to usb out 2 ?
+ 205   4                                      if(frame_status & send_to_usb) 
+ 206   4                                              if(frame_status & send_to_out2)
+ 207   4                                                      Create_Send_USB_Frame_From_MIDI_Buffer(CN1, &Serial_In_From_Z8, End_Index_LOCAL);
+ 208   4                                      
+ 209   4                                      // all buffer now treated
+ 210   4                                      //v1.1 Start_Index_LOCAL =  End_Index_LOCAL;
+ 211   4                                      //v1.2 
+ 212   4                                      Start_Index_LOCAL =  End_Index_LOCAL;
+ 213   4                              } // end frame is midi
+ 214   3                      } // end frame is valid
+ 215   2              } // end start <> end index             
+ 216   1      
+ 217   1              // the buffer has now been treated
+ 218   1              Serial_In_From_Z8.start_index = Start_Index_LOCAL;
+ 219   1      }
+ 220          
+ 221          
+ 222          // ***************************************************************************
+ 223          // Routine      : Check_Overflow_Flags()
+ 224          // Input        : 
+ 225          // Output       : None
+ 226          // Process      : Check Overflow flags and send results to lcd Z8, results are sent
+ 227          //                        sequencialy so we avoid message missing       
+ 228          // ***************************************************************************
+ 229          void Check_Overflow_Flags(void)
+ 230          {
+ 231   1              // check realtime from Midi in connector overflow flags
+ 232   1              if(MIDI_In_Realtime_From_Con.input_status & realtime_overflow)
+ 233   1              {
+C51 COMPILER V8.15   MAIN                                                                  12/02/2011 17:04:13 PAGE 5   
+
+ 234   2                      // send to Z8 board
+ 235   2                      Send_Single_Framed_byte_To_Z8(/*v1.1 FRAME_IS_COMMON_PARAM,*/ LCD_MESSAGE_TO_Z8_INDEX, midi_in_realtime_
+             -overflow_z8);
+ 236   2                      // clear overflow flag
+ 237   2                      MIDI_In_Realtime_From_Con.input_status &= ~realtime_overflow;
+ 238   2              }
+ 239   1      
+ 240   1              // check Midi in connector overflow flags
+ 241   1              if(MIDI_In_From_Con.input_status & input_overflow)
+ 242   1              {
+ 243   2                      // send to Z8 board
+ 244   2                      Send_Single_Framed_byte_To_Z8(/*v1.1 FRAME_IS_COMMON_PARAM,*/ LCD_MESSAGE_TO_Z8_INDEX, midi_in_overflow_
+             -z8);
+ 245   2                      // clear overflow flag
+ 246   2                      MIDI_In_From_Con.input_status &= ~input_overflow;
+ 247   2              }
+ 248   1      
+ 249   1              if(usb_state_from_ez0_bit)
+ 250   1              {
+ 251   2                      // check realtime from USB in overflow flags
+ 252   2                      if(MIDI_In_Realtime_From_Usb.input_status & realtime_overflow)
+ 253   2                      {
+ 254   3                              // send to Z8 board
+ 255   3                              Send_Single_Framed_byte_To_Z8(/*v1.1 FRAME_IS_COMMON_PARAM,*/ LCD_MESSAGE_TO_Z8_INDEX, usb_in_realtime_
+             -overflow_z8);
+ 256   3                              // clear overflow flag
+ 257   3                              MIDI_In_Realtime_From_Usb.input_status &= ~realtime_overflow;
+ 258   3                      }
+ 259   2              
+ 260   2                      // check Usb in overflow flags
+ 261   2                      if(MIDI_In_From_Usb.input_status & input_overflow)
+ 262   2                      {
+ 263   3                              // send to Z8 board
+ 264   3                              Send_Single_Framed_byte_To_Z8(/*v1.1 FRAME_IS_COMMON_PARAM,*/ LCD_MESSAGE_TO_Z8_INDEX, usb_in_overflow_
+             -z8);
+ 265   3                              // clear overflow flag
+ 266   3                              MIDI_In_From_Usb.input_status &= ~input_overflow;
+ 267   3                      }
+ 268   2              }
+ 269   1      }
+ 270          
+ 271          
+ 272          // ***************************************************************************
+ 273          // Routine      : Check_Realtime()
+ 274          // Input        : 
+ 275          // Output       : None
+ 276          // Process      : Check if Realtime MIDI has to be merged/treated 
+ 277          // ***************************************************************************
+ 278          void Check_Realtime(void)
+ 279          {
+ 280   1              if(bootloader_state != BOOTLOADER_OFF) return;
+ 281   1      
+ 282   1              // Check Realtime From Z8
+ 283   1              Check_Realtime_Buffers(&Realtime_From_Z8, 1);
+ 284   1      
+ 285   1              // Check Realtime MIDI Input buffer
+ 286   1              Check_Realtime_Buffers(&MIDI_In_Realtime_From_Con, merger_src_midi_in_state_z_ez0_bit);
+ 287   1      
+ 288   1              if(usb_state_from_ez0_bit)
+ 289   1              {
+ 290   2                      // Check Realtime USB MIDI Input buffer 
+ 291   2                      Check_Realtime_Buffers(&MIDI_In_Realtime_From_Usb, merger_src_usb_in_state_z_ez0_bit);
+C51 COMPILER V8.15   MAIN                                                                  12/02/2011 17:04:13 PAGE 6   
+
+ 292   2              }
+ 293   1      }
+ 294          
+ 295          
+ 296          // ***************************************************************************
+ 297          // Routine      : Check_Realtime_Buffers()
+ 298          // Input        : 
+ 299          // Output       : None
+ 300          // Process      : Check if incoming Realtime MIDI has to be merged/treated 
+ 301          // ***************************************************************************
+ 302          void Check_Realtime_Buffers(Midi_In_Realtime_Struct *midi_struct, bit merger_src_enable)
+ 303          {
+ 304   1              BYTE realtime_start_index_local = midi_struct->realtime_start_index;
+ 305   1              BYTE realtime_data_local;       
+ 306   1      
+ 307   1              // if realtime data is Active sense 0xFE or 0xFF then do not send to Z8 board
+ 308   1              // if midi filter is On then exit
+ 309   1              // if merger on MIDI out 1 is enabled then immediately send to MIDI out 1
+ 310   1              // if merger on USB  out 1 is enabled then forward incoming midi events
+ 311   1              // always send realtime to z8
+ 312   1              // send realtime to outputs midi & usb if respective mergers destination are on 
+ 313   1              
+ 314   1              // for each byte into the realtimer buffer
+ 315   1              while(realtime_start_index_local != midi_struct->realtime_end_index)
+ 316   1              {
+ 317   2                      realtime_data_local = midi_struct->realtime[realtime_start_index_local];
+ 318   2      
+ 319   2                      // check for possible merges to midi out 1 and usb out 1
+ 320   2                      if(!filter_state_z_ez0_bit)
+ 321   2                      {
+ 322   3                              // no midi filter, is the merger source on ?
+ 323   3                              if(merger_src_enable)
+ 324   3                              {
+ 325   4                                      // is the merger destination usb out 1 active ?
+ 326   4                                      if(usb_state_from_ez0_bit)
+ 327   4                                      // V1.69 if(merger_dst_usb_out_state_z_ez0_bit)
+ 328   4                                      if((merger_dst_usb_out_state_z_ez0_bit) || (midi_struct == &Realtime_From_Z8))
+ 329   4                                              Create_Send_Realtime_USB_Frame_From_MIDI_Buffer( CN0, realtime_data_local);
+ 330   4      
+ 331   4                                      // is the merger destination midi out 1 active ?
+ 332   4                                      // V1.69 if(merger_dst_out1_state_z_ez0_bit)
+ 333   4                                      if( (merger_dst_out1_state_z_ez0_bit) || (midi_struct == &Realtime_From_Z8))
+ 334   4                                              Send_To_Midi_Out_Con(realtime_data_local);
+ 335   4                              } // end merger source is active
+ 336   3                      } // end midi filter is off
+ 337   2              
+ 338   2                      // Check if must send to Z8 board : MUST FILTER ACTIVE SENSE HERE FE and also FF (since SOF & EOF)
+ 339   2                      // also send realtime to Z8 only if realtime source is not Z8 (to avoid loopback)
+ 340   2                      if(midi_struct != &Realtime_From_Z8)
+ 341   2                              if(realtime_data_local < MIDI_ACTIVE_SENSE)
+ 342   2                                      // Realtime MIDI is NOT encapsuled into frames when sent to Z8 board
+ 343   2                                      Send_To_Serial_Z8(realtime_data_local);
+ 344   2      
+ 345   2      
+ 346   2                      // Now check if Sync24 Must be updated
+ 347   2      /* removed block in V1.9
+ 348   2                      // V1.5 new block Now check if Sync24 Must be updated
+ 349   2                      if(sync24_state_z_ez0_bit)
+ 350   2                      {
+ 351   2                              // Realtime message comming from Internal sync ?
+ 352   2                              if(midi_struct == &Realtime_From_Z8)
+ 353   2                              {
+C51 COMPILER V8.15   MAIN                                                                  12/02/2011 17:04:13 PAGE 7   
+
+ 354   2                                      // internal sync ?
+ 355   2                                      if(!sync24_source_int_z_z_ez1_bit)      
+ 356   2                                              Update_Sync24(realtime_data_local);             
+ 357   2                              }
+ 358   2                              else
+ 359   2                              // Realtime messages comming from external 
+ 360   2                              {
+ 361   2                                      // external sync ?
+ 362   2                                      if(sync24_source_int_z_z_ez1_bit)       
+ 363   2                                              Update_Sync24(realtime_data_local);             
+ 364   2                              }
+ 365   2                      } // end sync24 is enabled
+ 366   2       */
+ 367   2                      realtime_start_index_local = (realtime_start_index_local + 1) & (MIDI_IN_REALTIME_BUFF_LENGHT-1);
+ 368   2              } // end realtime buffer contains data
+ 369   1      
+ 370   1              // Update treated pointers
+ 371   1              midi_struct->realtime_start_index = realtime_start_index_local;
+ 372   1      }
+ 373          
+ 374          // ***************************************************************************
+ 375          // Routine      : Update_Sync24()
+ 376          // Input        : char that contains realtime event
+ 377          // Output       : None
+ 378          // Process      : Parse realtime event received and transform to SYNC24 Output
+ 379          // ***************************************************************************
+ 380          void Update_Sync24(unsigned char data_received)
+ 381          {
+ 382   1              if(data_received == MIDI_CLOCK)
+ 383   1              {
+ 384   2                      // Here MIDI Clock is supposed to be low, send a pulse of 4 ms
+ 385   2                      // Timer 0 (2ms) is used to reach 4 ms required duration
+ 386   2                      // loading counter with 3 will result in 4 to 6 ms counter
+ 387   2                      SYNC24_CLOCK_PORT_OUT  |=  SYNC24_CLOCK_PIN;// Set CLOCK = 1
+ 388   2                      // Now must clear the above pin in 5 ms
+ 389   2                      sync24_clear_clock_cpt = 3; // 6 ms
+ 390   2              }
+ 391   1              else
+ 392   1              if(data_received == MIDI_START)
+ 393   1                      SYNC24_RUN_PORT_OUT  |=  SYNC24_RUN_PIN;        // Set RUN = 1
+ 394   1              else
+ 395   1              if(data_received == MIDI_STOP)
+ 396   1                      SYNC24_RUN_PORT_OUT  &= ~SYNC24_RUN_PIN;        // Set RUN = 0
+ 397   1              else
+ 398   1              if(data_received == MIDI_CONTINUE)
+ 399   1              {
+ 400   2                      SYNC24_RUN_PORT_OUT  |=  SYNC24_RUN_PIN;        // Set RUN = 1
+ 401   2                      SYNC24_CONT_PORT_OUT |=  SYNC24_CONT_PIN;       // Set CONT = 1
+ 402   2                      // Now must clear the above pin in 4 ms
+ 403   2                      sync24_clear_cont_cpt = 3; // 6ms
+ 404   2              }
+ 405   1      }
+ 406          
+ 407           /*
+ 408          // ***************************************************************************
+ 409          // Routine      : Check_Realtime_From_Z8()
+ 410          // Input        : 
+ 411          // Output       : None
+ 412          // Process      : Check if Realtime MIDI has to be sent from Z8 internal midi sync 
+ 413          // ***************************************************************************
+ 414          void Check_Realtime_From_Z8(void)
+ 415          {
+C51 COMPILER V8.15   MAIN                                                                  12/02/2011 17:04:13 PAGE 8   
+
+ 416          
+ 417          }
+ 418          */
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    698    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =    783    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =      6      15
+   IDATA SIZE       =     33    ----
+   BIT SIZE         =   ----       2
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

@@ -1,0 +1,474 @@
+C51 COMPILER V8.15   FW                                                                    12/02/2011 17:04:13 PAGE 1   
+
+
+C51 COMPILER V8.15, COMPILATION OF MODULE FW
+OBJECT MODULE PLACED IN fw.OBJ
+COMPILER INVOKED BY: C:\Program Files\Keil\C51\BIN\C51.EXE fw.c OPTIMIZE(9,SPEED) INCDIR(C:\backup_jd\midictrl\BSP_VERSI
+                    -ON_2\firmware\common_z8_ez\;..\..\common_z8_ez) DEFINE(EZ_COMPIL)
+
+line level    source
+
+   1          //-----------------------------------------------------------------------------
+   2          //      File:           fw.c
+   3          //      Contents:       Firmware frameworks task dispatcher and device request parser
+   4          //                              source.
+   5          //
+   6          //      Copyright (c) 2002 Cypress Semiconductor, Inc. All rights reserved
+   7          //
+   8          // $Archive: /USB/ez811/firmware/host/fw.c $
+   9          // $Date: 1/23/02 11:25a $
+  10          // $Revision: 4 $
+  11          //-----------------------------------------------------------------------------
+  12          #include "ezusb.h"
+  13          #include "ezregs.h"
+  14          #include "pins_def.h"
+  15          #include "common_def.h"
+  16          #include <common_z8_ez.h>
+  17          #include "main.h"
+  18          #include "usb.h"
+  19          #include "bootloader.h"
+  20          #include "serial.h"
+  21          #include "hardware.h"
+  22          #include "fw.h"
+  23          
+  24          //-----------------------------------------------------------------------------
+  25          // Random Macros
+  26          //-----------------------------------------------------------------------------
+  27          #define min(a,b) (((a)<(b))?(a):(b))
+  28          #define max(a,b) (((a)>(b))?(a):(b))
+  29          
+  30          //-----------------------------------------------------------------------------
+  31          // Constants
+  32          //-----------------------------------------------------------------------------
+  33          #define DELAY_COUNT                             0x9248*8L               // Delay for 8 sec at 24Mhz, 4 sec at 48
+  34          
+  35          #define NO_RENUM 
+  36          
+  37          //-----------------------------------------------------------------------------
+  38          // Global Variables
+  39          //-----------------------------------------------------------------------------
+  40          volatile BOOL   GotSUD;
+  41          BOOL                    Rwuen;
+  42          BOOL                    Selfpwr;
+  43          volatile BOOL   Sleep;                                          // Sleep mode enable flag
+  44          
+  45          WORD    pDeviceDscr;    // Pointer to Device Descriptor; Descriptors may be moved
+  46          WORD    pConfigDscr;    
+  47          WORD    pStringDscr;
+  48          
+  49          //WORD first_pass; // V1.5
+  50                  
+  51          // From MAIN.C
+  52          extern unsigned char bdata CTRL_REGS_7BITS_TO_Z8[CTRL_REG_MAX_FROM_EZ_TO_Z8];
+  53          extern unsigned char bdata CTRL_REGS_7BITS_FROM_Z8[CTRL_REG_NB_FROM_Z8_TO_EZ];
+  54          extern bit usb_state_from_ez0_bit;
+C51 COMPILER V8.15   FW                                                                    12/02/2011 17:04:13 PAGE 2   
+
+  55          extern bit usb_enumrated_from_ez0_bit;
+  56          extern xdata Midi_In_Struct MIDI_In_From_Con, MIDI_In_From_Usb;
+  57          extern bit merger_src_midi_in_state_z_ez0_bit;
+  58          extern bit merger_src_usb_in_state_z_ez0_bit;
+  59          extern bit must_start_bootloader_from_ez0_bit;
+  60          
+  61          
+  62          //-----------------------------------------------------------------------------
+  63          // Code
+  64          //-----------------------------------------------------------------------------
+  65          
+  66          // Task dispatcher
+  67          void main(void)
+  68          {
+  69   1              DWORD   i;
+  70   1              WORD    offset;
+  71   1              DWORD   DevDescrLen;
+  72   1      //      DWORD   j; //=0;
+  73   1              WORD    IntDescrAddr;
+  74   1              WORD    ExtDescrAddr;
+  75   1      
+  76   1              // V1.5 workaround for chip silicon Rev D
+  77   1      //      EZUSB_Discon(FALSE);
+  78   1      //      USBCS |= bmDISCON;
+  79   1      
+  80   1      //      USBCS = 0x0A; // disconnect
+  81   1      //      USBCS = 0x06; // reconnect
+  82   1      
+  83   1              // V1.5 disable usb for long time at boot
+  84   1      //      first_pass = 65535;
+  85   1      
+  86   1              // Initialize Global States
+  87   1              Sleep   = FALSE;        // Disable sleep mode
+  88   1              Rwuen   = FALSE;        // Disable remote wakeup
+  89   1              Selfpwr = FALSE;        // Disable self powered
+  90   1              GotSUD  = FALSE;        // Clear "Got setup data" flag
+  91   1      
+  92   1              ISOCTL |= 1;                                                                     // disable isochronous endpoints to free memory ISODISAB=1 (bit 0)
+  93   1              CPUCS &= ~bmCLK24OE;                                                     // turn off Clock 24 out pin
+  94   1      
+  95   1              // Initialize user device
+  96   1              TD_Init();
+  97   1      
+  98   1              // clear usb flags at starttup
+  99   1              // this reg must be cleared before the usb is active since it contains all usb flags
+ 100   1              CTRL_REGS_7BITS_TO_Z8[0]        = 0;
+ 101   1      
+ 102   1              // The following section of code is used to relocate the descriptor table. 
+ 103   1              // Since the SUDPTRH and SUDPTRL are assigned the address of the descriptor 
+ 104   1              // table, the descriptor table must be located in on-part memory.
+ 105   1              // The 4K demo tools locate all code sections in external memory.
+ 106   1              // The descriptor table is relocated by the frameworks ONLY if it is found 
+ 107   1              // to be located in external memory.
+ 108   1              pDeviceDscr = (WORD)&DeviceDscr;
+ 109   1              pConfigDscr = (WORD)&ConfigDscr;
+ 110   1              pStringDscr = (WORD)&StringDscr;
+ 111   1              if ((WORD)&DeviceDscr & 0xe000)
+ 112   1              {
+ 113   2                      IntDescrAddr = INTERNAL_DSCR_ADDR;
+ 114   2                      ExtDescrAddr = (WORD)&DeviceDscr;
+ 115   2                      DevDescrLen = (WORD)&UserDscr - (WORD)&DeviceDscr + 2;
+ 116   2                      for (i = 0; i < DevDescrLen; i++)
+C51 COMPILER V8.15   FW                                                                    12/02/2011 17:04:13 PAGE 3   
+
+ 117   2                              *((BYTE xdata *)IntDescrAddr+i) = 0xCD;
+ 118   2                      for (i = 0; i < DevDescrLen; i++)
+ 119   2                              *((BYTE xdata *)IntDescrAddr+i) = *((BYTE xdata *)ExtDescrAddr+i);
+ 120   2                      pDeviceDscr = IntDescrAddr;
+ 121   2                      offset = (WORD)&DeviceDscr - INTERNAL_DSCR_ADDR;
+ 122   2                      pConfigDscr -= offset;
+ 123   2                      pStringDscr -= offset;
+ 124   2              }
+ 125   1      
+ 126   1      
+ 127   1              // V1.5 workaround for chip silicon Rev D number 6
+ 128   1              // Firmware upload from external EEPROM must complete before the USB becomes active.
+ 129   1              //EZUSB_Delay(1000);
+ 130   1              //EZUSB_Delay(800);
+ 131   1      
+ 132   1              EZUSB_IRQ_ENABLE();                             // Enable USB interrupt (INT2)
+ 133   1              EZUSB_ENABLE_RSMIRQ();                  // Wake-up interrupt
+ 134   1      
+ 135   1              // The 8051 is responsible for all USB events, even those that have happened
+ 136   1              // before this point.  We cannot ignore pending USB interrupts.
+ 137   1              // The chip will come out of reset with the flags all cleared.
+ 138   1              USBIRQ = 0xff;                                  // Clear any pending USB interrupt requests
+ 139   1      
+ 140   1              USBBAV = USBBAV | 1 & ~bmBREAK;                                 // Disable breakpoints and autovectoring
+ 141   1              USBIEN |= bmSUDAV | bmSUTOK | bmSUSP | bmURES;  // Enable selected interrupts
+ 142   1              EA = 1;                                                                                 // Enable 8051 interrupts
+ 143   1      
+ 144   1      
+ 145   1              #ifndef NO_RENUM
+                      // Note: at full speed, high speed hosts may take 5 sec to detect device
+                      EZUSB_Discon(TRUE); // Renumerate
+                      #endif
+ 149   1      
+ 150   1              // This loop waits until we receive a setup packet from the host.
+ 151   1              // NOTE: The device will continue to renumerate until it receives a setup
+ 152   1              // packet.  This fixes a microsoft USB bug that loses disconnect/reconnect 
+ 153   1              // events during initial USB device driver configuration dialog box.
+ 154   1              // B2 Load:  This code is not needed for B2 load, only for renumeration.
+ 155   1      /*      // V1.5
+ 156   1              #ifndef NO_RENUM
+ 157   1                      while(!GotSUD)
+ 158   1                      {
+ 159   1                              if(!GotSUD)
+ 160   1                                      EZUSB_Discon(TRUE);     // renumerate until setup received
+ 161   1                              for(j=0;(j<DELAY_COUNT) && (!GotSUD);++j);
+ 162   1                      }
+ 163   1              #endif
+ 164   1      */
+ 165   1              CKCON = (CKCON&(~bmSTRETCH)) | FW_STRETCH_VALUE; // Set stretch to 0 (after renumeration)
+ 166   1      
+ 167   1              // CHIP IS NOW READY TO OPERATE, CHECK IF BOOTLOADER IS REQUESTED
+ 168   1              // WAIT ALSO FOR THE Z8 INCOMING CONFIGURATION BYTES
+ 169   1      
+ 170   1              /* Check if USB is attached to host */
+ 171   1              Check_If_Usb_Attached();
+ 172   1      
+ 173   1              // check if bootloader request
+ 174   1              //Check_InitialSwitchesState();
+ 175   1              if(EDIT_PORT_IN & EDIT_PIN)     
+ 176   1                      if(OK_PORT_IN & OK_PIN)
+ 177   1                              if(CANCEL_PORT_IN & CANCEL_PIN)
+ 178   1                                      Check_Bootloader();     
+C51 COMPILER V8.15   FW                                                                    12/02/2011 17:04:13 PAGE 4   
+
+ 179   1      
+ 180   1              // turn on tx1 and rx1 (serial to/from z8)
+ 181   1              PORTBCFG |= 0x0C;       // Port B uses RX2 & TX2
+ 182   1      
+ 183   1              // if usb present : wait for the device beeing enumerated
+ 184   1      //      while( (VUSB_PORT_IN & VUSB_PIN) && (!usb_enumrated_from_ez0_bit))
+ 185   1      //                      Check_Usb();
+ 186   1      
+ 187   1              // V1.2 Change the serial port Baud rate from OCD baud rate to 31250 kb/sec
+ 188   1              // TIMER 1 : BAUD RATE GENERATOR FOR SERIAL PORTS 1
+ 189   1          TH1  = 256-SERIAL_TO_Z8_BAUD_RELOAD;        // Setup Baudrate reload value
+ 190   1          TL1  = 256-SERIAL_TO_Z8_BAUD_RELOAD;        // Setup Baudrate overflow value
+ 191   1      
+ 192   1              // Turn on timer 0 (2 ms permanent timer for sync24)
+ 193   1              TR0 = 1;
+ 194   1      
+ 195   1              // synchronize the EZ to Z8 board
+ 196   1              SyncToZ8Board();
+ 197   1      
+ 198   1              /* ******************************* Main Loop ********************************* */
+ 199   1              while(TRUE)                                             
+ 200   1              {
+ 201   2      
+ 202   2                      Check_Usb();
+ 203   2      
+ 204   2                      // V1.9 Check both MIDI in and USB in realtime buffers 
+ 205   2                      Check_Realtime();
+ 206   2      
+ 207   2                      // Call to main user loop there
+ 208   2                      // TD_Poll();
+ 209   2                      // Check if USB is attached to host 
+ 210   2                      Check_If_Usb_Attached();
+ 211   2              
+ 212   2                      // Check if MIDI In buffer contains complete event 
+ 213   2                      Check_Midi_In_Buffer(&MIDI_In_From_Con, merger_src_midi_in_state_z_ez0_bit);
+ 214   2              
+ 215   2                      // Check both MIDI in and USB in realtime buffers 
+ 216   2                      //Check_Realtime();
+ 217   2      
+ 218   2                      // Check Overflow flags
+ 219   2                      Check_Overflow_Flags();
+ 220   2                              
+ 221   2                      // Check Serial buffer from Z8 board 
+ 222   2                      Check_Serial_In_From_Z8_Buffer();
+ 223   2      
+ 224   2                      // V1.9 Check both MIDI in and USB in realtime buffers 
+ 225   2                      //Check_Realtime();
+ 226   2      
+ 227   2                      // Check Realtime from Z8 board (internal sync)
+ 228   2                      //Check_Realtime_From_Z8();
+ 229   2      
+ 230   2                      // Check if bootloader must be started
+ 231   2                      if(must_start_bootloader_from_ez0_bit)
+ 232   2                              Check_Bootloader();             
+ 233   2      
+ 234   2                      // Check if USB In buffer contains complete event 
+ 235   2                      if(usb_state_from_ez0_bit)
+ 236   2                      {
+ 237   3                              // Check if USB MIDI In buffer contains complete event 
+ 238   3                                      Ep2out_Function();
+ 239   3              
+ 240   3                                      Check_Midi_In_Buffer(&MIDI_In_From_Usb, merger_src_usb_in_state_z_ez0_bit);
+C51 COMPILER V8.15   FW                                                                    12/02/2011 17:04:13 PAGE 5   
+
+ 241   3                      }
+ 242   2      
+ 243   2                      // Check both MIDI in and USB in realtime buffers 
+ 244   2                      Check_Realtime();
+ 245   2      
+ 246   2                      // V1.5
+ 247   2      /*              if(first_pass)
+ 248   2                      {
+ 249   2                              first_pass--;
+ 250   2                              if(first_pass==0)
+ 251   2                              {
+ 252   2      //                              EZUSB_IRQ_ENABLE();                             // Enable USB interrupt (INT2)
+ 253   2      //                              USB_LED_PORT_OUT |= USB_LED_PIN;
+ 254   2                                      USBCS = 0x06; // reconnect
+ 255   2      
+ 256   2                                      EZUSB_IRQ_ENABLE();                             // Enable USB interrupt (INT2)
+ 257   2                                      EZUSB_ENABLE_RSMIRQ();                  // Wake-up interrupt
+ 258   2                                      // The 8051 is responsible for all USB events, even those that have happened
+ 259   2                                      // before this point.  We cannot ignore pending USB interrupts.
+ 260   2                                      // The chip will come out of reset with the flags all cleared.
+ 261   2                                      USBIRQ = 0xff;                                  // Clear any pending USB interrupt requests
+ 262   2                              
+ 263   2                                      USBBAV = USBBAV | 1 & ~bmBREAK;                                 // Disable breakpoints and autovectoring
+ 264   2                                      USBIEN |= bmSUDAV | bmSUTOK | bmSUSP | bmURES;  // Enable selected interrupts
+ 265   2                              }
+ 266   2                      }
+ 267   2      */
+ 268   2              }
+ 269   1      }
+ 270          
+ 271          // Device request parser
+ 272          void SetupCommand(void)
+ 273          {
+ 274   1              void    *dscr_ptr;
+ 275   1              DWORD   i;
+ 276   1      
+ 277   1              // V1.5
+ 278   1              //if(first_pass) return;
+ 279   1      
+ 280   1              switch(SETUPDAT[1])
+ 281   1              {
+ 282   2                      case SC_GET_DESCRIPTOR:                                         // *** Get Descriptor
+ 283   2                              if(DR_GetDescriptor())
+ 284   2                                      switch(SETUPDAT[3])                     
+ 285   2                                      {
+ 286   3                                              case GD_DEVICE:                         // Device
+ 287   3                                                      SUDPTRH = MSB(pDeviceDscr);
+ 288   3                                                      SUDPTRL = LSB(pDeviceDscr);
+ 289   3                                                      break;
+ 290   3                                              case GD_CONFIGURATION:                  // Configuration
+ 291   3                                                      if(dscr_ptr = (void *)EZUSB_GetConfigDscr(SETUPDAT[2]))
+ 292   3                                                      {
+ 293   4                                                              SUDPTRH = MSB(dscr_ptr);
+ 294   4                                                              SUDPTRL = LSB(dscr_ptr);
+ 295   4                                                      }
+ 296   3                                                      else
+ 297   3                                                              EZUSB_STALL_EP0();      // Stall End Point 0
+ 298   3                                                      break;
+ 299   3                                              case GD_STRING:                         // String
+ 300   3                                                      if(dscr_ptr = (void *)EZUSB_GetStringDscr(SETUPDAT[2]))
+ 301   3                                                      {
+ 302   4                                                              // Workaround for rev D errata number 8
+C51 COMPILER V8.15   FW                                                                    12/02/2011 17:04:13 PAGE 6   
+
+ 303   4                                                              // If you're certain that you will never run on rev D,
+ 304   4                                                              // you can just do this:
+ 305   4                                                              // SUDPTRH = MSB(dscr_ptr);
+ 306   4                                                              // SUDPTRL = LSB(dscr_ptr);
+ 307   4                                                              STRINGDSCR *sdp;
+ 308   4                                                              BYTE len;
+ 309   4      
+ 310   4                                                              sdp = dscr_ptr;
+ 311   4      
+ 312   4                                                              len = sdp->length;
+ 313   4                                                              if (len > SETUPDAT[6]) 
+ 314   4                                                                      len = SETUPDAT[6]; //limit to the requested length
+ 315   4                                                              
+ 316   4                                                              while (len)
+ 317   4                                                              {
+ 318   5                                                                      for(i=0; i<min(len,64); i++)
+ 319   5                                                                              *(IN0BUF+i) = *((BYTE xdata *)sdp+i);
+ 320   5      
+ 321   5                                                                      //set length and arm Endpoint
+ 322   5                                                                      EZUSB_SET_EP_BYTES(IN0BUF_ID,min(len,64));      
+ 323   5                                                                      len -= min(len,64);
+ 324   5                                              (BYTE *)sdp += 64;
+ 325   5      
+ 326   5                                                                      // Wait for it to go out (Rev C and above)
+ 327   5                                                                      while(EP0CS & 0x04)
+ 328   5                                                                              ;
+ 329   5                                                              }
+ 330   4      
+ 331   4                                                              // Arm a 0 length packet just in case.  There was some reflector traffic about
+ 332   4                                                              // Apple hosts asking for too much data.  This will keep them happy and will
+ 333   4                                                              // not hurt valid hosts because the next SETUP will clear this.
+ 334   4                                                              EZUSB_SET_EP_BYTES(IN0BUF_ID,0);        
+ 335   4                                                              // Clear the HS-nak bit
+ 336   4                                                              EP0CS = bmHS;
+ 337   4                                                      }
+ 338   3                                                      else 
+ 339   3                                                              EZUSB_STALL_EP0();      // Stall End Point 0
+ 340   3                                                      break;
+ 341   3                                              default:                                // Invalid request
+ 342   3                                                      EZUSB_STALL_EP0();              // Stall End Point 0
+ 343   3                                      }
+ 344   2                              break;
+ 345   2                      case SC_GET_INTERFACE:                                          // *** Get Interface
+ 346   2                              DR_GetInterface();
+ 347   2                              break;
+ 348   2                      case SC_SET_INTERFACE:                                          // *** Set Interface
+ 349   2                              DR_SetInterface();
+ 350   2                              break;
+ 351   2                      case SC_SET_CONFIGURATION:                                      // *** Set Configuration
+ 352   2                              DR_SetConfiguration();
+ 353   2                              break;
+ 354   2                      case SC_GET_CONFIGURATION:                                      // *** Get Configuration
+ 355   2                              DR_GetConfiguration();
+ 356   2                              break;
+ 357   2                      case SC_GET_STATUS:                                             // *** Get Status
+ 358   2                              if(DR_GetStatus())
+ 359   2                                      switch(SETUPDAT[0])
+ 360   2                                      {
+ 361   3                                              case GS_DEVICE:                         // Device
+ 362   3                                                      IN0BUF[0] = ((BYTE)Rwuen << 1) | (BYTE)Selfpwr;
+ 363   3                                                      IN0BUF[1] = 0;
+ 364   3                                                      EZUSB_SET_EP_BYTES(IN0BUF_ID,2);
+C51 COMPILER V8.15   FW                                                                    12/02/2011 17:04:13 PAGE 7   
+
+ 365   3                                                      break;
+ 366   3                                              case GS_INTERFACE:                      // Interface
+ 367   3                                                      IN0BUF[0] = 0;
+ 368   3                                                      IN0BUF[1] = 0;
+ 369   3                                                      EZUSB_SET_EP_BYTES(IN0BUF_ID,2);
+ 370   3                                                      break;
+ 371   3                                              case GS_ENDPOINT:                       // End Point
+ 372   3                                                      IN0BUF[0] = EPIO[EPID(SETUPDAT[4])].cntrl & bmEPSTALL;
+ 373   3                                                      IN0BUF[1] = 0;
+ 374   3                                                      EZUSB_SET_EP_BYTES(IN0BUF_ID,2);
+ 375   3                                                      break;
+ 376   3                                              default:                                // Invalid Command
+ 377   3                                                      EZUSB_STALL_EP0();              // Stall End Point 0
+ 378   3                                      }
+ 379   2                              break;
+ 380   2                      case SC_CLEAR_FEATURE:                                          // *** Clear Feature
+ 381   2                              if(DR_ClearFeature())
+ 382   2                                      switch(SETUPDAT[0])
+ 383   2                                      {
+ 384   3                                              case FT_DEVICE:                         // Device
+ 385   3                                                      if(SETUPDAT[2] == 1)
+ 386   3                                                              Rwuen = FALSE;          // Disable Remote Wakeup
+ 387   3                                                      else
+ 388   3                                                              EZUSB_STALL_EP0();      // Stall End Point 0
+ 389   3                                                      break;
+ 390   3                                              case FT_ENDPOINT:                       // End Point
+ 391   3                                                      if(SETUPDAT[2] == 0)
+ 392   3                                      {
+ 393   4                                                              EZUSB_UNSTALL_EP( EPID(SETUPDAT[4]) );
+ 394   4                                      EZUSB_RESET_DATA_TOGGLE( SETUPDAT[4] );
+ 395   4                                      }
+ 396   3                                                      else
+ 397   3                                                              EZUSB_STALL_EP0();      // Stall End Point 0
+ 398   3                                                      break;
+ 399   3                                      }
+ 400   2                              break;
+ 401   2                      case SC_SET_FEATURE:                                            // *** Set Feature
+ 402   2                              if(DR_SetFeature())
+ 403   2                                      switch(SETUPDAT[0])
+ 404   2                                      {
+ 405   3                                              case FT_DEVICE:                         // Device
+ 406   3                                                      if(SETUPDAT[2] == 1)
+ 407   3                                                              Rwuen = TRUE;           // Enable Remote Wakeup
+ 408   3                                                      else
+ 409   3                                                              EZUSB_STALL_EP0();      // Stall End Point 0
+ 410   3                                                      break;
+ 411   3                                              case FT_ENDPOINT:                       // End Point
+ 412   3                                                      if(SETUPDAT[2] == 0)
+ 413   3                                                              EZUSB_STALL_EP( EPID(SETUPDAT[4]) );
+ 414   3                                                      else
+ 415   3                                                              EZUSB_STALL_EP0();       // Stall End Point 0
+ 416   3                                                      break;
+ 417   3                                      }
+ 418   2                              break;
+ 419   2                      default:                                                        // *** Invalid Command
+ 420   2                              if(DR_VendorCmnd())
+ 421   2                                      EZUSB_STALL_EP0();                              // Stall End Point 0
+ 422   2              }
+ 423   1      
+ 424   1              // Acknowledge handshake phase of device request
+ 425   1              // Required for rev C does not effect rev B
+ 426   1              EP0CS |= bmBIT1;
+C51 COMPILER V8.15   FW                                                                    12/02/2011 17:04:13 PAGE 8   
+
+ 427   1      }
+ 428          
+ 429          // Wake-up interrupt handler
+ 430          void resume_isr(void) interrupt WKUP_VECT
+ 431          {
+ 432   1              // V1.5
+ 433   1              //if(first_pass) return;
+ 434   1      
+ 435   1              EZUSB_CLEAR_RSMIRQ();
+ 436   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1005    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =      6      23
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      4    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

@@ -1,0 +1,227 @@
+C51 COMPILER V8.15   HARDWARE                                                              12/02/2011 17:04:13 PAGE 1   
+
+
+C51 COMPILER V8.15, COMPILATION OF MODULE HARDWARE
+OBJECT MODULE PLACED IN hardware.OBJ
+COMPILER INVOKED BY: C:\Program Files\Keil\C51\BIN\C51.EXE hardware.c OPTIMIZE(9,SPEED) INCDIR(C:\backup_jd\midictrl\BSP
+                    -_VERSION_2\firmware\common_z8_ez\;..\..\common_z8_ez) DEFINE(EZ_COMPIL)
+
+line level    source
+
+   1          //#pragma NOIV  // Do not generate interrupt vectors
+   2           
+   3          // **************************** HARDWARE.C *********************************
+   4          // All code relating to ezusb hardware
+   5          // *************************************************************************
+   6          
+   7          #include <ezusb.h>
+   8          #include <ezregs.h>
+   9          #include "pins_def.h"
+  10          #include "common_def.h"
+  11          #include <common_z8_ez.h>
+  12          #include "hardware.h"
+  13          #include "serial.h"
+  14          #include "bootloader.h"
+  15          #include "main.h"
+  16          #include "usb.h"
+  17          
+  18          // GLOBAL VARS
+  19          extern unsigned char timeout_cpt;
+  20          
+  21          // From MAIN.C
+  22          extern xdata Midi_In_Struct     MIDI_In_From_Con, MIDI_In_From_Usb, Serial_In_From_Z8;
+  23          extern idata Midi_In_Realtime_Struct  MIDI_In_Realtime_From_Con, MIDI_In_Realtime_From_Usb, Realtime_From_
+             -Z8;
+  24          extern unsigned char bdata              CTRL_REGS_7BITS_TO_Z8[CTRL_REG_MAX_FROM_EZ_TO_Z8];
+  25          extern unsigned char bdata              CTRL_REGS_7BITS_FROM_Z8[CTRL_REG_NB_FROM_Z8_TO_EZ];
+  26          extern bit z8_board_fully_updated_from_ez0_bit;
+  27          
+  28          // FROM SERIAL.C
+  29          extern unsigned char tx_to_midi_out_con_start_index;
+  30          extern unsigned char tx_to_midi_out_con_end_index;
+  31          extern bit tx_to_midi_out_con_busy;
+  32          extern bit tx_to_midi_out_con_full;
+  33          extern unsigned char tx_to_serial_z8_start_index;
+  34          extern unsigned char tx_to_serial_z8_end_index;
+  35          extern bit tx_to_serial_z8_busy;
+  36          extern bit tx_to_serial_z8_full;
+  37          
+  38          //extern bit usb_bootloader_requested;
+  39          
+  40          // FROM BOOTLOADER.C
+  41          extern volatile BYTE bootloader_state;
+  42          extern BYTE fw_bl_src;
+  43          
+  44          /* ******************************************************************** */
+  45          /* Routine: Init_Variables                                                                                              */
+  46          /* Process: Init Variables default states                                                               */
+  47          /* Inputs:      None                                                                                                            */
+  48          /* Outputs:     None                                                                                                            */
+  49          /* ******************************************************************** */
+  50          void Init_Variables(void)
+  51          {
+  52   1              bootloader_state                         = BOOTLOADER_OFF; 
+  53   1      //      usb_bootloader_requested         = FALSE;
+C51 COMPILER V8.15   HARDWARE                                                              12/02/2011 17:04:13 PAGE 2   
+
+  54   1      
+  55   1              tx_to_midi_out_con_full          = 0;
+  56   1              tx_to_serial_z8_full             = 0;
+  57   1              tx_to_midi_out_con_busy          = 0;
+  58   1              tx_to_serial_z8_busy             = 0;
+  59   1      
+  60   1              tx_to_midi_out_con_start_index = 0;
+  61   1              tx_to_serial_z8_start_index    = 0;
+  62   1              tx_to_midi_out_con_end_index   = 0;
+  63   1              tx_to_serial_z8_end_index          = 0;
+  64   1      
+  65   1              MIDI_In_From_Con.merger_state                                   = WAIT_FOR_CORRECT_DATA;
+  66   1              MIDI_In_From_Con.current_index                                  = 0;
+  67   1              MIDI_In_From_Con.start_index                                    = 0;
+  68   1              MIDI_In_From_Con.end_index                                              = 0;    
+  69   1              MIDI_In_From_Con.input_status                                   = 0;
+  70   1              MIDI_In_Realtime_From_Con.realtime_start_index  = 0;
+  71   1              MIDI_In_Realtime_From_Con.realtime_end_index    = 0;
+  72   1              MIDI_In_Realtime_From_Con.input_status                  = 0;
+  73   1      
+  74   1              MIDI_In_From_Usb.merger_state                                   = NORMAL;
+  75   1              MIDI_In_From_Usb.current_index                                  = 0;
+  76   1              MIDI_In_From_Usb.start_index                                    = 0;
+  77   1              MIDI_In_From_Usb.end_index                                              = 0;
+  78   1              MIDI_In_From_Usb.input_status                                   = 0;
+  79   1              MIDI_In_Realtime_From_Usb.realtime_start_index  = 0;
+  80   1              MIDI_In_Realtime_From_Usb.realtime_end_index    = 0;
+  81   1              MIDI_In_Realtime_From_Usb.input_status                  = 0;
+  82   1      
+  83   1              Serial_In_From_Z8.merger_state                                  = WAIT_SOF;
+  84   1              Serial_In_From_Z8.current_index                                 = 0;
+  85   1              Serial_In_From_Z8.start_index                                   = 0;
+  86   1              Serial_In_From_Z8.end_index                                             = 0;
+  87   1              Serial_In_From_Z8.input_status                                  = 0;
+  88   1              Realtime_From_Z8.realtime_start_index                   = 0;
+  89   1              Realtime_From_Z8.realtime_end_index                             = 0;
+  90   1              Realtime_From_Z8.input_status                                   = 0;
+  91   1              
+  92   1              // to ensure proper Z8 to EZ synchro, will have to wait for last reg from Z8
+  93   1              CTRL_REGS_7BITS_FROM_Z8[LAST_CTRL_REG_7BITS_TO_EZ_INDEX] = 0;
+  94   1      
+  95   1              // fw bootload source is midi or usb, unknown yet
+  96   1              fw_bl_src = FW_BL_SRC_UNKNOWN;
+  97   1      
+  98   1              timeout_cpt = 0;
+  99   1      
+ 100   1      }
+ 101          
+ 102          /* ******************************************************************** */
+ 103          /* Routine: Init_IOs                                                                                                    */
+ 104          /* Process: Init IO default states                                                                              */
+ 105          /* Inputs:      None                                                                                                            */
+ 106          /* Outputs:     None                                                                                                            */
+ 107          /* ******************************************************************** */
+ 108          void Init_IOs(void)
+ 109          {
+ 110   1      
+ 111   1              // Inititalize IOs shared functions
+ 112   1      //      PORTACFG = 0;           // Port A is a standard GPIO
+ 113   1      //      PORTBCFG |= 0x0C;       // Port B uses RX2 & TX2
+ 114   1              PORTBCFG  = 0;          // turn off tx1 and rx1 (serial to/from z8)
+ 115   1              PORTCCFG |= 0x03;       // Port C uses RX0 & TX0 ( & INT0 & INT1 ) 
+C51 COMPILER V8.15   HARDWARE                                                              12/02/2011 17:04:13 PAGE 3   
+
+ 116   1      
+ 117   1              // Initialize directions for each ports
+ 118   1              OEA = 0x20; // Port A4 input at startup, PA5 is output (INPUT=0)
+ 119   1              OEB = 0xC9; // everything's output exept footswitch, edit, ok (INPUT=0)
+ 120   1              OEC = 0xE2; // everything's input exept TX0, SYNC24_CONT, SYC24_RUN, OCD_EN
+ 121   1      
+ 122   1              // Initialize output Ports default values
+ 123   1              OUTA = 0;
+ 124   1      //      OUTB = 0; // be sure the z8 reset is cleared, tx1 (to dbg pin) must be 1
+ 125   1              OUTB = 0x08; // be sure the z8 reset is cleared, tx1 (to dbg pin) must be 1
+ 126   1              OUTC = 0; // be sure ocd_en is cleared
+ 127   1      }
+ 128          
+ 129          
+ 130          /* ******************************************************************** */
+ 131          /* Routine: SyncToZ8Board                                                                                               */
+ 132          /* Process:                                                                                                                     */
+ 133          /* Inputs:      None                                                                                                            */
+ 134          /* Outputs:     None                                                                                                            */
+ 135          /* ******************************************************************** */
+ 136          void SyncToZ8Board(void)
+ 137          {
+ 138   1              // Release Z8 board reset line
+ 139   1              Z8_RESET_PORT_OUT |=  Z8_RESET_PIN;
+ 140   1      
+ 141   1              //DEBUGJDS turn on USB led
+ 142   1              USB_LED_PORT_OUT |= USB_LED_PIN;
+ 143   1      
+ 144   1      #ifndef SIMUL
+ 145   1              timeout_cpt = 255;
+ 146   1              // Loop until all config registers from Z8 have been received OR timout (510ms)
+ 147   1              do 
+ 148   1              { 
+ 149   2                      Check_Serial_In_From_Z8_Buffer();
+ 150   2                      Check_Usb();
+ 151   2              }
+ 152   1              while( (CTRL_REGS_7BITS_FROM_Z8[LAST_CTRL_REG_7BITS_TO_EZ_INDEX] != EZ_FULLY_UPDATED) &&
+ 153   1                         //(!usb_bootloader_requested));
+ 154   1                         (timeout_cpt));              
+ 155   1      #endif
+ 156   1      
+ 157   1      #ifdef SIMUL
+                      CTRL_REGS_7BITS_FROM_Z8[0] = 0x2D;
+                      CTRL_REGS_7BITS_FROM_Z8[1] = 0x10;
+                      CTRL_REGS_7BITS_FROM_Z8[LAST_CTRL_REG_7BITS_TO_EZ_INDEX] = EZ_FULLY_UPDATED;
+              #endif
+ 162   1      
+ 163   1              // V1.5 : be sure the EZ chip is configured to accept bootloader even if Z8 chip is not answering since n
+             -ot programmed
+ 164   1              if(!timeout_cpt)
+ 165   1              {
+ 166   2                      CTRL_REGS_7BITS_FROM_Z8[0] = 0x0F;
+ 167   2                      CTRL_REGS_7BITS_FROM_Z8[1] = 0x00;
+ 168   2                      CTRL_REGS_7BITS_FROM_Z8[LAST_CTRL_REG_7BITS_TO_EZ_INDEX] = EZ_FULLY_UPDATED;
+ 169   2              }
+ 170   1      
+ 171   1              // Send registers dedicated to Z8 (CTRL_REGS_7BITS_TO_Z8)
+ 172   1              Send_Single_Framed_byte_To_Z8(/*v1.1 FRAME_IS_COMMON_PARAM,*/ CTRL_REG_0_7B_FROM_EZ_INDEX, (CTRL_REGS_7BI
+             -TS_TO_Z8[0] | (1<<z8_board_fully_updated_from_ez0_bit_pos)));
+ 173   1      
+ 174   1              USB_LED_PORT_OUT &= ~USB_LED_PIN;
+ 175   1      
+C51 COMPILER V8.15   HARDWARE                                                              12/02/2011 17:04:13 PAGE 4   
+
+ 176   1              // synchronize z8 board 
+ 177   1              z8_board_fully_updated_from_ez0_bit = 1;
+ 178   1      }
+ 179          
+ 180          /* ******************************************************************** */
+ 181          /* Routine: Check_InitialSwitchesState                                                                                          */
+ 182          /* Process:                                                                                                                     */
+ 183          /* Inputs:      None                                                                                                            */
+ 184          /* Outputs:     None                                                                                                            */
+ 185          /* ******************************************************************** */
+ 186          /*
+ 187          void Check_InitialSwitchesState(void)
+ 188          {
+ 189                  if(EDIT_PORT_IN & EDIT_PIN)     
+ 190                          if(OK_PORT_IN & OK_PIN)
+ 191                                  if(CANCEL_PORT_IN & CANCEL_PIN)
+ 192                                          Check_Bootloader();     
+ 193          }
+ 194          */
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    207    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

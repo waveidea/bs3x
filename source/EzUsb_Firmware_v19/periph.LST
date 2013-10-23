@@ -1,0 +1,309 @@
+C51 COMPILER V8.15   PERIPH                                                                12/02/2011 17:04:13 PAGE 1   
+
+
+C51 COMPILER V8.15, COMPILATION OF MODULE PERIPH
+OBJECT MODULE PLACED IN periph.OBJ
+COMPILER INVOKED BY: C:\Program Files\Keil\C51\BIN\C51.EXE periph.c OPTIMIZE(9,SPEED) INCDIR(C:\backup_jd\midictrl\BSP_V
+                    -ERSION_2\firmware\common_z8_ez\;..\..\common_z8_ez) DEFINE(EZ_COMPIL)
+
+line level    source
+
+   1          #pragma NOIV                                    // Do not generate interrupt vectors
+   2          
+   3          //-----------------------------------------------------------------------------
+   4          //      File:           periph.c
+   5          //      Contents:       Hooks required to implement USB peripheral function.
+   6          //
+   7          //      Copyright (c) 1997 AnchorChips, Inc. All rights reserved
+   8          //-----------------------------------------------------------------------------
+   9          #include <ezusb.h>
+  10          #include <ezregs.h>
+  11          #include "pins_def.h"
+  12          #include "common_def.h"
+  13          #include <common_z8_ez.h>
+  14          #include "periph.h"
+  15          #include "hardware.h"
+  16          #include "itr.h"
+  17          #include "serial.h"
+  18          #include "usb.h"
+  19          #include "usb_defs.h"
+  20          
+  21          extern BOOL     GotSUD;                 // Received setup data flag
+  22          extern BOOL     Sleep;
+  23          extern BOOL     Rwuen;
+  24          extern BOOL     Selfpwr;
+  25          
+  26          BYTE    Configuration;          // Current configuration
+  27          BYTE    AlternateSetting;       // Alternate settings
+  28          
+  29          extern bit usb_enumrated_from_ez0_bit;
+  30          //bit usb_bootloader_requested;
+  31          
+  32          /* ******************************************************************** */
+  33          /* Routine: TD_Init                                                                                                             */
+  34          /* Process: Init Variables default states                                                               */
+  35          /* Inputs:      None                                                                                                            */
+  36          /* Outputs:     None                                                                                                            */
+  37          /* ******************************************************************** */
+  38          //-----------------------------------------------------------------------------
+  39          // Task Dispatcher hooks
+  40          // The following hooks are called by the task dispatcher.
+  41          //-----------------------------------------------------------------------------
+  42          void TD_Init(void)                              // Called once at startup
+  43          {
+  44   1              // Init i2c bus for eeprom ez upgrade
+  45   1              EZUSB_InitI2C();
+  46   1              //Rwuen = TRUE;                         // Enable remote-wakeup
+  47   1      
+  48   1              // Initializations
+  49   1              Init_IOs();
+  50   1      
+  51   1              // Init Serial Interface and MIDI I/O buffers
+  52   1      //      TD_Resume();
+  53   1      
+  54   1              Init_Variables();
+C51 COMPILER V8.15   PERIPH                                                                12/02/2011 17:04:13 PAGE 2   
+
+  55   1              Init_Serial_Ports();
+  56   1      
+  57   1              // Enable endpoint 2 in, and endpoint 2 out
+  58   1              //IN07VAL = bmEP2;                      // Validate all EP's
+  59   1              // IN07VAL = bmEP1;                     // Validate all EP's
+  60   1              IN07VAL  = USB_ITRS_EP_IN;
+  61   1              OUT07VAL = bmEP2;
+  62   1      
+  63   1              // Enable double buffering on endpoint 2 in, and endpoint 2 out
+  64   1      //      USBPAIR = 0x09;
+  65   1      //      USBPAIR = 0x08;   // pair out endpoint 2&3
+  66   1              USBPAIR = USB_PAIRED_EP;   // pair out endpoint 2&3
+  67   1      
+  68   1              // Arm Endpoint 2 out to receive data
+  69   1              EPIO[OUT2BUF_ID].bytes = 0;
+  70   1      
+  71   1      }
+  72          
+  73          /* ******************************************************************** */
+  74          /* Routine: TD_Suspend                                                                                                  */
+  75          /* Process:                                                                                                                     */
+  76          /* Inputs:      None                                                                                                            */
+  77          /* Outputs:     None                                                                                                            */
+  78          /* ******************************************************************** */
+  79          BOOL TD_Suspend(void)                   // Called before the device goes into suspend mode
+  80          {
+  81   1              // Turn off breakpoint light before entering suspend
+  82   1              USBBAV |= bmBREAK;              // Clear the breakpoint
+  83   1              return(TRUE);
+  84   1      }
+  85          
+  86          BOOL TD_Resume(void)                    // Called after the device resumes
+  87          {
+  88   1      //      Init_Variables();
+  89   1      //      Init_Serial_Ports();
+  90   1              //Check_InitialSwitchesState();
+  91   1      //      if(EDIT_PORT_IN & EDIT_PIN)     
+  92   1      //              if(OK_PORT_IN & OK_PIN)
+  93   1      //                      if(CANCEL_PORT_IN & CANCEL_PIN)
+  94   1      //                              usb_bootloader_requested = TRUE;
+  95   1              return(TRUE);
+  96   1      }
+  97          
+  98          //-----------------------------------------------------------------------------
+  99          // Device Request hooks
+ 100          //      The following hooks are called by the end point 0 device request parser.
+ 101          //-----------------------------------------------------------------------------
+ 102          
+ 103          BOOL DR_GetDescriptor(void)
+ 104          {
+ 105   1              return(TRUE);
+ 106   1      }
+ 107          
+ 108          BOOL DR_SetConfiguration(void)  // Called when a Set Configuration command is received
+ 109          {
+ 110   1              Configuration = SETUPDAT[2];
+ 111   1              usb_enumrated_from_ez0_bit = TRUE;
+ 112   1              return(TRUE);                           // Handled by user code
+ 113   1      }
+ 114          
+ 115          BOOL DR_GetConfiguration(void)  // Called when a Get Configuration command is received
+ 116          {
+C51 COMPILER V8.15   PERIPH                                                                12/02/2011 17:04:13 PAGE 3   
+
+ 117   1              IN0BUF[0] = Configuration;
+ 118   1              EZUSB_SET_EP_BYTES(IN0BUF_ID,1);
+ 119   1              return(TRUE);                           // Handled by user code
+ 120   1      }
+ 121          
+ 122          BOOL DR_SetInterface(void)              // Called when a Set Interface command is received
+ 123          {
+ 124   1              AlternateSetting = SETUPDAT[2];
+ 125   1              return(TRUE);                           // Handled by user code
+ 126   1      }
+ 127          
+ 128          BOOL DR_GetInterface(void)              // Called when a Set Interface command is received
+ 129          {
+ 130   1              IN0BUF[0] = AlternateSetting;
+ 131   1              EZUSB_SET_EP_BYTES(IN0BUF_ID,1);
+ 132   1              return(TRUE);                           // Handled by user code
+ 133   1      }
+ 134          
+ 135          BOOL DR_GetStatus(void)
+ 136          {
+ 137   1              return(TRUE);
+ 138   1      }
+ 139          
+ 140          BOOL DR_ClearFeature(void)
+ 141          {
+ 142   1              return(TRUE);
+ 143   1      }
+ 144          
+ 145          BOOL DR_SetFeature(void)
+ 146          {
+ 147   1              return(TRUE);
+ 148   1      }
+ 149          
+ 150          BOOL DR_VendorCmnd(void)
+ 151          {
+ 152   1              return(TRUE);
+ 153   1      }
+ 154          
+ 155          //-----------------------------------------------------------------------------
+ 156          // USB Interrupt Handlers
+ 157          //      The following functions are called by the USB interrupt jump table.
+ 158          //-----------------------------------------------------------------------------
+ 159          
+ 160          // Setup Data Available Interrupt Handler
+ 161          void ISR_Sudav(void) interrupt 0
+ 162          {
+ 163   1              GotSUD = TRUE;                          // Set flag
+ 164   1              EZUSB_IRQ_CLEAR();
+ 165   1              USBIRQ = bmSUDAV;                       // Clear SUDAV IRQ
+ 166   1      }
+ 167          
+ 168          // Setup Token Interrupt Handler
+ 169          void ISR_Sutok(void) interrupt 0
+ 170          {
+ 171   1              EZUSB_IRQ_CLEAR();
+ 172   1              USBIRQ = bmSUTOK;                       // Clear SUTOK IRQ
+ 173   1      }
+ 174          
+ 175          void ISR_Sof(void) interrupt 0
+ 176          {
+ 177   1              EZUSB_IRQ_CLEAR();
+ 178   1              USBIRQ = bmSOF;                         // Clear SOF IRQ
+C51 COMPILER V8.15   PERIPH                                                                12/02/2011 17:04:13 PAGE 4   
+
+ 179   1              // V1.5 workaround for Rev D silicon chip : clear this bit two times
+ 180   1      //      USBIRQ = bmSOF;                         // Clear SOF IRQ
+ 181   1      }
+ 182          
+ 183          void ISR_Ures(void) interrupt 0
+ 184          {
+ 185   1              EPIO[OUT2BUF_ID].bytes = 0;
+ 186   1      
+ 187   1              EZUSB_IRQ_CLEAR();
+ 188   1              USBIRQ = bmURES;                        // Clear URES IRQ
+ 189   1      }
+ 190          
+ 191          void ISR_IBN(void) interrupt 0
+ 192          {
+ 193   1         // ISR for the IN Bulk NAK (IBN) interrupt.
+ 194   1      }
+ 195          
+ 196          void ISR_Susp(void) interrupt 0
+ 197          {
+ 198   1              Sleep = TRUE;
+ 199   1              EZUSB_IRQ_CLEAR();
+ 200   1              USBIRQ = bmSUSP;
+ 201   1      }
+ 202          
+ 203          void ISR_Ep0in(void) interrupt 0
+ 204          {
+ 205   1      }
+ 206          
+ 207          void ISR_Ep0out(void) interrupt 0
+ 208          {
+ 209   1      }
+ 210          
+ 211          void ISR_Ep1in(void) interrupt 0
+ 212          {
+ 213   1      }
+ 214          
+ 215          void ISR_Ep1out(void) interrupt 0
+ 216          {
+ 217   1      }
+ 218          
+ 219          void ISR_Ep2in(void) interrupt 0
+ 220          {
+ 221   1      }
+ 222          
+ 223          void ISR_Ep2out(void) interrupt 0
+ 224          {
+ 225   1      /*
+ 226   1              // call the function which treats the received usb packet(s)
+ 227   1              Ep2out_Function();
+ 228   1      
+ 229   1              // Arm the OUT so it can receive the next packet
+ 230   1              EPIO[OUT2BUF_ID].bytes = 0;
+ 231   1      
+ 232   1              // clear the IRQ
+ 233   1              EZUSB_IRQ_CLEAR();
+ 234   1              OUT07IRQ = bmEP2;
+ 235   1      */
+ 236   1      }
+ 237          
+ 238          
+ 239          void ISR_Ep3in(void) interrupt 0
+ 240          {
+C51 COMPILER V8.15   PERIPH                                                                12/02/2011 17:04:13 PAGE 5   
+
+ 241   1      }
+ 242          
+ 243          void ISR_Ep3out(void) interrupt 0
+ 244          {
+ 245   1      }
+ 246          
+ 247          void ISR_Ep4in(void) interrupt 0
+ 248          {
+ 249   1      }
+ 250          
+ 251          void ISR_Ep4out(void) interrupt 0
+ 252          {
+ 253   1      }
+ 254          
+ 255          void ISR_Ep5in(void) interrupt 0
+ 256          {
+ 257   1      }
+ 258          
+ 259          void ISR_Ep5out(void) interrupt 0
+ 260          {
+ 261   1      }
+ 262          
+ 263          void ISR_Ep6in(void) interrupt 0
+ 264          {
+ 265   1      }
+ 266          
+ 267          void ISR_Ep6out(void) interrupt 0
+ 268          {
+ 269   1      }
+ 270          
+ 271          void ISR_Ep7in(void) interrupt 0
+ 272          {
+ 273   1      }
+ 274          
+ 275          void ISR_Ep7out(void) interrupt 0
+ 276          {
+ 277   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    225    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =      2    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

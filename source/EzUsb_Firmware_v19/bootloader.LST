@@ -1,0 +1,647 @@
+C51 COMPILER V8.15   BOOTLOADER                                                            12/02/2011 17:04:14 PAGE 1   
+
+
+C51 COMPILER V8.15, COMPILATION OF MODULE BOOTLOADER
+OBJECT MODULE PLACED IN bootloader.OBJ
+COMPILER INVOKED BY: C:\Program Files\Keil\C51\BIN\C51.EXE bootloader.c OPTIMIZE(9,SPEED) INCDIR(C:\backup_jd\midictrl\B
+                    -SP_VERSION_2\firmware\common_z8_ez\;..\..\common_z8_ez) DEFINE(EZ_COMPIL)
+
+line level    source
+
+   1          //#pragma NOIV  // Do not generate interrupt vectors
+   2           
+   3          #include <ezusb.h>
+   4          #include <ezregs.h>
+   5          #include "common_def.h"
+   6          #include <common_z8_ez.h>
+   7          #include "pins_def.h"
+   8          #include "periph.h"
+   9          #include "bootloader.h"
+  10          #include "serial.h"
+  11          #include "hardware.h"
+  12          #include "usb.h"
+  13          
+  14          volatile BYTE bootloader_state;
+  15          bit must_program_z8;
+  16          
+  17          // BYTE I2C_Addr;
+  18          
+  19          // FROM MAIN.C
+  20          extern bit usb_state_from_ez0_bit;
+  21          extern bit z8_board_fully_updated_from_ez0_bit;
+  22          extern xdata Midi_In_Struct  MIDI_In_From_Con, MIDI_In_From_Usb, Serial_In_From_Z8;
+  23          //BYTE fw_checksum;
+  24          BYTE fw_bl_src;
+  25          
+  26          // FROM IDENTITY.C
+  27          extern unsigned char code identity[];
+  28          
+  29          // FROM SERIAL.C
+  30          //extern unsigned char code wid_sysex_header[];
+  31          
+  32          // V1.4 FROM SERIAL.C
+  33          extern bit tx_to_serial_z8_busy;
+  34          
+  35          
+  36          /* ******************************************************************** */
+  37          /* Routine: SoftReset()                                                                                                 */
+  38          /* Process:                                                                                                                     */
+  39          /* Inputs:      None                                                                                                            */
+  40          /* Outputs:     None                                                                                                            */
+  41          /* ******************************************************************** */
+  42          //void SoftReset(void)
+  43          //{
+  44          //      ((void (code *) (void)) 0x0000) ();
+  45          //}
+  46          
+  47          /* ******************************************************************** */
+  48          /* Routine: Check_Bootloader                                                                                    */
+  49          /* Process:                                                                                                                     */
+  50          /* Inputs:      None                                                                                                            */
+  51          /* Outputs:     None                                                                                                            */
+  52          /* ******************************************************************** */
+  53          void Check_Bootloader(void)
+  54          {
+C51 COMPILER V8.15   BOOTLOADER                                                            12/02/2011 17:04:14 PAGE 2   
+
+  55   1                      // reinit all chip
+  56   1                      TD_Init();
+  57   1                      // just to allow send/receive from midi and usb inputs
+  58   1                      z8_board_fully_updated_from_ez0_bit = 1;
+  59   1                      // Init i2c bus for eeprom ez upgrade
+  60   1                      //EZUSB_InitI2C();
+  61   1                      // update bootloading flags and state
+  62   1                      bootloader_state = SEND_IDENTITY_SYSEX;                 
+  63   1      
+  64   1                      // First send the Bootloader identity sysex acknoledge to midi & usb out
+  65   1                      SendIdentityBootLoader();
+  66   1      
+  67   1                      must_program_z8 = FALSE;
+  68   1      
+  69   1                      // The data firmware upgrade starts here
+  70   1                      bootloader_state = WAIT_EZ_FW_DATA;                             
+  71   1                      // Now Wait for the ez firmware data sysexs
+  72   1                      WaitNextBootLoaderState(bootloader_state);
+  73   1      
+  74   1                      if(must_program_z8)
+  75   1                      {
+  76   2                              // Release Z8 board reset line
+  77   2                              Z8_RESET_PORT_OUT |=  Z8_RESET_PIN;
+  78   2                              // wait por
+  79   2                              EZUSB_Delay(200);
+  80   2      
+  81   2                              // disable rx1
+  82   2                              SCON1 = 0x40;           /* SCON1: mode 1, 8-bit UART, disable rcvr  */
+  83   2      
+  84   2                              // tx1 is now dedicated to z8 dbg pin
+  85   2                              OCD_EN_PORT_OUT |= OCD_EN_PIN;
+  86   2      
+  87   2                              // set z8 dbg pin low
+  88   2                              TX1_TO_Z8_DBG_PORT_OUT &= ~TX1_TO_Z8_DBG_PIN;
+  89   2      
+  90   2                              // wait 2sec
+  91   2                              EZUSB_Delay(2000);
+  92   2      
+  93   2                              // set z8 dbg pin high
+  94   2                              TX1_TO_Z8_DBG_PORT_OUT |= TX1_TO_Z8_DBG_PIN;
+  95   2                              
+  96   2                              // turn on tx1 and rx1 (serial to/from z8)
+  97   2                              PORTBCFG |= 0x0C;
+  98   2      
+  99   2                              // send ocd first byte so the z8 autobaudrate the serial line
+ 100   2                              Send_To_Serial_Z8(OCD_FIRST_BYTE);
+ 101   2                              EZUSB_Delay1ms();
+ 102   2      
+ 103   2                              // place the z8 chip in ocd mode
+ 104   2                              Send_To_Serial_Z8(OCD_WRITE_CTR_REG_CMD);
+ 105   2                              Send_To_Serial_Z8(OCD_CTR_REG_DBGMODE);
+ 106   2                              EZUSB_Delay(100);
+ 107   2      
+ 108   2                              InitFlashFrqAndUnlock();
+ 109   2      
+ 110   2                              // selet flash page 0
+ 111   2                              WriteSingleRegOCD(OCD_FLASH_SELECT_PAGE, 0x00);
+ 112   2      
+ 113   2                              // launch a mass erase
+ 114   2                              WriteSingleRegOCD(OCD_FLASH_CTR_REG_ADD, OCD_FLASH_MASS_ERASE);
+ 115   2                              
+ 116   2                              EZUSB_Delay(Z8_ERASING_TIME);
+C51 COMPILER V8.15   BOOTLOADER                                                            12/02/2011 17:04:14 PAGE 3   
+
+ 117   2      
+ 118   2                              InitFlashFrqAndUnlock();
+ 119   2                      
+ 120   2                              // Now Wait for the z8 firmware data sysexs
+ 121   2                              WaitNextBootLoaderState(bootloader_state);
+ 122   2      
+ 123   2                              EZUSB_Delay(50);
+ 124   2      
+ 125   2                              // relock the flash controller
+ 126   2                              WriteSingleRegOCD(OCD_FLASH_CTR_REG_ADD, OCD_FLASH_CTR_REG_RESET);
+ 127   2                              
+ 128   2                              /*
+ 129   2                              ///////////////////// Z8 CRC CHECKS /////////////////////////////////
+ 130   2                              // V1.4 it is now time to verify Z8 programmed flash 
+ 131   2                              bootloader_state = VERIFY_Z8_CRC;       
+ 132   2                              // V1.4 Read the Z8 memory CRC and compare to calculated CRC
+ 133   2                              Send_To_Serial_Z8(OCD_READ_FLASH_CRC);
+ 134   2                              // V1.4 required time is 65536 * 1/(20MHz)
+ 135   2                              EZUSB_Delay(50);
+ 136   2                              // V1.4 the serial port should now have received the z8 internal CRC in buffer 0 to 3
+ 137   2                              // Send this CRC to host
+ 138   2                              Serial_In_From_Z8.buffer[7]   = Serial_In_From_Z8.buffer[0];
+ 139   2                              Serial_In_From_Z8.buffer[8]   = Serial_In_From_Z8.buffer[1];                    
+ 140   2                              Serial_In_From_Z8.end_index   = WID_SYX_HEADER_SIZE + 3 + 1;
+ 141   2                              AssignWidSysexHeader();
+ 142   2                              // send ack firmware 
+ 143   2                              Serial_In_From_Z8.buffer[6]   = FRAME_IS_FIRMWARE_OR_PURE_MIDI | sysex_direction_sysxid0 | prog_uploa
+             -d_sysxid0;
+ 144   2                              // send eox
+ 145   2                              Serial_In_From_Z8.buffer[9]  = MIDI_EOX;
+ 146   2                              SendDispatchFwSysex();
+ 147   2                              ///////////////////// END Z8 CRC CHECKS /////////////////////////////////
+ 148   2                              */
+ 149   2                                                      
+ 150   2                              // exit z8 ocd mode
+ 151   2                              OCD_EN_PORT_OUT   &=  ~OCD_EN_PIN;
+ 152   2      
+ 153   2                              // exit z8 ocd mode
+ 154   2                              Z8_RESET_PORT_OUT &=  ~Z8_RESET_PIN;
+ 155   2                      }
+ 156   1      
+ 157   1              // Now finish with a soft reset
+ 158   1              // SoftReset();
+ 159   1              while(1)
+ 160   1              { 
+ 161   2                      Check_Usb();
+ 162   2                      Ep2out_Function();
+ 163   2              }
+ 164   1      }
+ 165          
+ 166          // ***************************************************************************
+ 167          // Routine      : SendIdentityBootLoader()
+ 168          // Input        : 
+ 169          // Output       : None
+ 170          // Process      : send all 11 identity bytes to usb & midi out 1, 
+ 171          //            we dont know yet what is the bootloader midi source : use the Z8 input buffer 
+ 172          // ***************************************************************************
+ 173          void SendIdentityBootLoader(void)
+ 174          {
+ 175   1        unsigned char i;
+ 176   1       
+ 177   1        //Serial_In_From_Z8.start_index = 0;
+C51 COMPILER V8.15   BOOTLOADER                                                            12/02/2011 17:04:14 PAGE 4   
+
+ 178   1        Serial_In_From_Z8.end_index   = WID_SYX_HEADER_SIZE + 4 + IDENTITY_LENGHT + 1;
+ 179   1       
+ 180   1        AssignWidSysexHeader();
+ 181   1      
+ 182   1        // send identity common param id and address
+ 183   1        Serial_In_From_Z8.buffer[6]   = FRAME_IS_COMMON_PARAM | sysex_direction_sysxid0 | prog_upload_sysxid0;
+ 184   1      
+ 185   1        // Send length common param address
+ 186   1        Serial_In_From_Z8.buffer[7]   = IDENTITY_LENGHT;
+ 187   1        // Send IDENTITY common param address  
+ 188   1        Serial_In_From_Z8.buffer[8]   = IDENTITY_REQUEST_INDEX;
+ 189   1        // Send group : dummy byte here  
+ 190   1        Serial_In_From_Z8.buffer[9]   = 0;
+ 191   1        // send identity bytes
+ 192   1        for(i=0; i<IDENTITY_LENGHT ; i++)
+ 193   1              Serial_In_From_Z8.buffer[10+i] = identity[i];
+ 194   1        // send eox
+ 195   1        Serial_In_From_Z8.buffer[21]   = MIDI_EOX;
+ 196   1        
+ 197   1        SendDispatchFwSysex();
+ 198   1      }
+ 199          
+ 200          // ***************************************************************************
+ 201          // Routine      : SendFwAcknoledge()
+ 202          // Input        : 
+ 203          // Output       : None
+ 204          // Process      : send single byte ack to usb & midi out 1, use the Z8 input buffer 
+ 205          // ***************************************************************************
+ 206          void SendFwAcknoledge(unsigned char result)
+ 207          {
+ 208   1      
+ 209   1        //Serial_In_From_Z8.start_index = 0;
+ 210   1        Serial_In_From_Z8.end_index   = WID_SYX_HEADER_SIZE + 1 + 1;
+ 211   1        
+ 212   1        AssignWidSysexHeader();
+ 213   1      
+ 214   1        // send ack firmware 
+ 215   1        Serial_In_From_Z8.buffer[6]   = /*v1.1 FRAME_IS_FIRMWARE*/FRAME_IS_FIRMWARE_OR_PURE_MIDI | sysex_directi
+             -on_sysxid0 | prog_upload_sysxid0 | result;
+ 216   1        
+ 217   1        // send eox
+ 218   1        Serial_In_From_Z8.buffer[7]   = MIDI_EOX;
+ 219   1      
+ 220   1        SendDispatchFwSysex();
+ 221   1        
+ 222   1      }
+ 223          
+ 224          // ***************************************************************************
+ 225          // Routine      : AssignWidSysexHeader()
+ 226          // Input        : 
+ 227          // Output       : None
+ 228          // Process      : 
+ 229          // ***************************************************************************
+ 230          void AssignWidSysexHeader(void)
+ 231          {
+ 232   1      //      BYTE i;
+ 233   1      
+ 234   1              // send wid sysex header  
+ 235   1              Serial_In_From_Z8.buffer[0]   = MIDI_SOX;
+ 236   1              Serial_In_From_Z8.buffer[1]   = WID_SYX_ID0;
+ 237   1              Serial_In_From_Z8.buffer[2]   = WID_SYX_ID1;
+ 238   1              Serial_In_From_Z8.buffer[3]   = WID_SYX_ID2;
+C51 COMPILER V8.15   BOOTLOADER                                                            12/02/2011 17:04:14 PAGE 5   
+
+ 239   1              Serial_In_From_Z8.buffer[4]   = WID_SYX_ID3;
+ 240   1              Serial_In_From_Z8.buffer[5]   = WID_SYX_ID4;
+ 241   1      
+ 242   1      //      for(i=0; i<WID_SYX_HEADER_SIZE ; i++)
+ 243   1      //              Serial_In_From_Z8.buffer[i] = wid_sysex_header[i];
+ 244   1      
+ 245   1      }
+ 246          
+ 247          // ***************************************************************************
+ 248          // Routine      : SendDispatchFwSysex()
+ 249          // Input        : 
+ 250          // Output       : None
+ 251          // Process      : optimize by grouping with same fct from main.c
+ 252          // ***************************************************************************
+ 253          void SendDispatchFwSysex(void)
+ 254          {
+ 255   1              // BYTE start_index_local = Serial_In_From_Z8.start_index;
+ 256   1              BYTE start_index_local = 0;
+ 257   1      
+ 258   1              // Send all bytes to MIDI Out Connector
+ 259   1              if(fw_bl_src != FW_BL_SRC_USB_IN)
+ 260   1              {
+ 261   2                      while (start_index_local != Serial_In_From_Z8.end_index)
+ 262   2                      {
+ 263   3                              Send_To_Midi_Out_Con(Serial_In_From_Z8.buffer[start_index_local]);
+ 264   3                              start_index_local++; // no need to modulo since always start from 0
+ 265   3                      }
+ 266   2              }
+ 267   1      
+ 268   1              // Also send to usb if present
+ 269   1              if(fw_bl_src  != FW_BL_SRC_MIDI_IN)
+ 270   1              if(usb_state_from_ez0_bit)
+ 271   1              {
+ 272   2                      Serial_In_From_Z8.start_index   = 0;
+ 273   2                      // Send all bytes to USB Out 
+ 274   2                      Create_Send_USB_Frame_From_MIDI_Buffer(CN0, &Serial_In_From_Z8, Serial_In_From_Z8.end_index);
+ 275   2              }
+ 276   1      
+ 277   1              // V1.4
+ 278   1              Serial_In_From_Z8.start_index           = 0;
+ 279   1              Serial_In_From_Z8.end_index             = 0;
+ 280   1              Serial_In_From_Z8.current_index         = 0;
+ 281   1      }
+ 282          
+ 283          // ***************************************************************************
+ 284          // Routine      : WaitNextBootLoaderState()
+ 285          // Input        : 
+ 286          // Output       : None
+ 287          // Process      : loop until received sysex is the one awaited
+ 288          // ***************************************************************************
+ 289          void WaitNextBootLoaderState(unsigned char current_state)
+ 290          {
+ 291   1              // Loop until receiving expected firmware sysex 
+ 292   1              do
+ 293   1              {
+ 294   2                      Check_If_Usb_Attached();                
+ 295   2                      Check_Usb();
+ 296   2      
+ 297   2                      // bootloader source not yet known or midi in ?
+ 298   2                      if(fw_bl_src != FW_BL_SRC_USB_IN)
+ 299   2                              // check if awaited sysex received on midi in
+ 300   2                              Check_MIDI_Buff_Send_To_Z8_Board(&MIDI_In_From_Con, MIDI_In_From_Con.end_index);
+C51 COMPILER V8.15   BOOTLOADER                                                            12/02/2011 17:04:14 PAGE 6   
+
+ 301   2                      
+ 302   2                      // bootloader source not yet known or usb in ?
+ 303   2                      if(fw_bl_src != FW_BL_SRC_MIDI_IN)      
+ 304   2                      {
+ 305   3                              // check if awaited sysex received on usb in
+ 306   3                              if(usb_state_from_ez0_bit)
+ 307   3                              {
+ 308   4                                      Check_MIDI_Buff_Send_To_Z8_Board(&MIDI_In_From_Usb, MIDI_In_From_Usb.end_index);
+ 309   4                                      Ep2out_Function();
+ 310   4                              }
+ 311   3                      }
+ 312   2              }
+ 313   1              while(bootloader_state == current_state);
+ 314   1      }
+ 315          
+ 316          // ***************************************************************************
+ 317          // Routine      : DecodeFirmwareSysex()
+ 318          // Input        : 
+ 319          // Output       : must send ack bool
+ 320          // Process      : decode the sysex dedicated to firmware
+ 321          // ***************************************************************************
+ 322          void DecodeFirmwareSysex(Midi_In_Struct *midi_struct)
+ 323          {
+ 324   1              BYTE SYSXID0;
+ 325   1              WORD Address;
+ 326   1              BYTE i, j, tmp1, tmp2, tmp3, lenght_div_2;
+ 327   1              BYTE result = 0;
+ 328   1              bit must_send_ack = FALSE;
+ 329   1              BYTE fw_checksum = 0;
+ 330   1      
+ 331   1              SYSXID0 = midi_struct->buffer[6];
+ 332   1      
+ 333   1              // check the received sysex is dedicated to firmware otherwise return
+ 334   1              // also check it is a programming sysex : ack request must be set for firmware programming
+ 335   1              if((SYSXID0 & (FRAME_TO_Z8_TYPE_MSK | acknoledge_sysxid0)) == (/*v1.1 FRAME_IS_FIRMWARE*/FRAME_IS_FIRMWAR
+             -E_OR_PURE_MIDI | acknoledge_sysxid0))
+ 336   1              {
+ 337   2                      must_send_ack = TRUE;
+ 338   2      
+ 339   2                      // must finish firmware upgrade ?
+ 340   2                      if(SYSXID0 & fw_znext_finish_sysxid0)
+ 341   2                      {
+ 342   3                              // bootloader_state = TERMINATE_FW_UPGRADE;
+ 343   3                              bootloader_state++;
+ 344   3                              result = acknoledge_sysxid0;
+ 345   3                              // pass to z8 programming ?
+ 346   3                              if(SYSXID0 & prog_ez_z8_sysxid0)
+ 347   3                              {
+ 348   4                                      must_program_z8 = TRUE;
+ 349   4                                      // reset crc z8
+ 350   4                                      // z8_flash_crc = 0;
+ 351   4                              }
+ 352   3                      }
+ 353   2                      else
+ 354   2                      {
+ 355   3                              // here we have to program EZ or Z8 firmware data
+ 356   3                              // extract address from sysex
+ 357   3                              Address  =  midi_struct->buffer[8]  << 14;
+ 358   3                              Address += (midi_struct->buffer[9]  << 7);
+ 359   3                              Address += (midi_struct->buffer[10]);
+ 360   3      
+ 361   3                              // un nibble data, decode it, calculate checksum
+C51 COMPILER V8.15   BOOTLOADER                                                            12/02/2011 17:04:14 PAGE 7   
+
+ 362   3                              fw_checksum = 0;
+ 363   3                              j= FW_SYSX_DATA_START;
+ 364   3                              for(i=0; i < midi_struct->buffer[7]; i=i+2)
+ 365   3                              {
+ 366   4                                      tmp1 = midi_struct->buffer[FW_SYSX_DATA_START+i];
+ 367   4                                      tmp2 = midi_struct->buffer[FW_SYSX_DATA_START+i+1];
+ 368   4                                      fw_checksum = (fw_checksum + tmp1) & 0x7F;
+ 369   4                                      fw_checksum = (fw_checksum + tmp2) & 0x7F;
+ 370   4                                      midi_struct->buffer[j] = ( (tmp1 << 4) + (tmp2 & 0x0F)) ^ 0x55;
+ 371   4                                      j++;
+ 372   4                              }
+ 373   3      
+ 374   3                              // compare checksum
+ 375   3                              if(fw_checksum == midi_struct->buffer[FW_SYSX_DATA_START+i])
+ 376   3                              {
+ 377   4                                      lenght_div_2 = midi_struct->buffer[7] >> 1;
+ 378   4                                      
+ 379   4                                      // NEED TO PROGRAM EZ USB EEPROM ?
+ 380   4                                      if(!(SYSXID0 & prog_ez_z8_sysxid0))
+ 381   4                                      {
+ 382   5                                              if(Address < EE24C64_SIZE)
+ 383   5                                                      //if(!(LSB(Address) % 32))
+ 384   5                                                      {
+ 385   6                                                              EZUSB_IRQ_DISABLE();
+ 386   6                                                              CKCON |= 0x07; // Set stretch to Non zero when accessing I2C (insert 7 wait states)
+ 387   6                                                              // write and verify eeprom result=0 if error
+ 388   6                                                              result = EEPROMWriteVerify(Address, lenght_div_2, &midi_struct->buffer[FW_SYSX_DATA_START]);
+ 389   6                                                              CKCON &= 0xF8; // Set stretch to 0 after i2c access (required if using paired endpoints : see chip 
+             -errata)
+ 390   6                                                              EZUSB_IRQ_ENABLE();
+ 391   6                                                      }
+ 392   5                                      }
+ 393   4                                      // OR NEED TO PROGRAM Z8 ?
+ 394   4                                      else
+ 395   4                                      {
+ 396   5                                              // calculated checksum is ok to start
+ 397   5                                              result = acknoledge_sysxid0;            
+ 398   5      
+ 399   5                                              // ///////////////// PROGRAM Z8 /////////////////
+ 400   5                                              // Send write command
+ 401   5                                              Send_To_Serial_Z8(OCD_WRITE_PRG_MEM_CMD);
+ 402   5                                              // Send address msb to write
+ 403   5                                              Send_To_Serial_Z8(Address >> 8);
+ 404   5                                              // Send address msb to write
+ 405   5                                              Send_To_Serial_Z8(Address & 0xFF);
+ 406   5                                              // Send data_lenght msb to write
+ 407   5                                              Send_To_Serial_Z8(0x00);
+ 408   5                                              // Send data_lenght lsb to write
+ 409   5                                              Send_To_Serial_Z8(lenght_div_2);
+ 410   5                                              // Now send datas
+ 411   5                                              for(i=0; i < lenght_div_2; i++)
+ 412   5                                              {
+ 413   6                                                      Send_To_Serial_Z8(midi_struct->buffer[FW_SYSX_DATA_START+i]);
+ 414   6                                              }               
+ 415   5      
+ 416   5                                              // V1.4 Wait for the transmit buffer being empty (everything sent to Z8)
+ 417   5                                              while(tx_to_serial_z8_busy);
+ 418   5      
+ 419   5                                              // wait raw time write
+ 420   5                                              EZUSB_Delay(50); // V1.4   10
+ 421   5      
+ 422   5                                              // V1.4 ///////////////// READ BACK Z8 AND CHECK IF SAME /////////////////
+C51 COMPILER V8.15   BOOTLOADER                                                            12/02/2011 17:04:14 PAGE 8   
+
+ 423   5                                              // Send write command
+ 424   5                                              Send_To_Serial_Z8(OCD_READ_PRG_MEM_CMD);
+ 425   5                                              // Send address msb to write
+ 426   5                                              Send_To_Serial_Z8(Address >> 8);
+ 427   5                                              // Send address msb to write
+ 428   5                                              Send_To_Serial_Z8(Address & 0xFF);
+ 429   5                                              // Send data_lenght msb to write
+ 430   5                                              Send_To_Serial_Z8(0x00);
+ 431   5                                              // Send data_lenght lsb to write
+ 432   5                                              Send_To_Serial_Z8(lenght_div_2);
+ 433   5      
+ 434   5                                              // V1.4 Wait for the transmit buffer being empty (everything sent to Z8)
+ 435   5                                              while(tx_to_serial_z8_busy);
+ 436   5      
+ 437   5                                              // V1.4 enable rx1 for reading back datas from z8
+ 438   5                                              SCON1 |= 0x50;          /* SCON1: mode 1, 8-bit UART, enable rcvr  */
+ 439   5                                              
+ 440   5                                              // V1.4 wait for all data being received from Z8
+ 441   5                                              while(Serial_In_From_Z8.current_index < lenght_div_2);
+ 442   5      
+ 443   5      //              EZUSB_Delay(50);
+ 444   5      //              Send_To_Midi_Out_Con(0xF0);
+ 445   5      //              Send_To_Midi_Out_Con(lenght_div_2);
+ 446   5      //              Send_To_Midi_Out_Con(Serial_In_From_Z8.start_index);
+ 447   5      //              Send_To_Midi_Out_Con(Serial_In_From_Z8.current_index);
+ 448   5      //              Send_To_Midi_Out_Con(Serial_In_From_Z8.end_index);
+ 449   5      //              Send_To_Midi_Out_Con(00);
+ 450   5      //              Send_To_Midi_Out_Con(00);               
+ 451   5      //              Send_To_Midi_Out_Con(0xF7);
+ 452   5      
+ 453   5                                              // V1.4 Now read datas from serial_in_from_z8 input buffer
+ 454   5                                              for(i=0; i < lenght_div_2; i++)
+ 455   5                                              {
+ 456   6                                                      // read data received from serial port buffer
+ 457   6                                                      tmp3 = Serial_In_From_Z8.buffer[i];
+ 458   6      
+ 459   6      //              Send_To_Midi_Out_Con(0xF0);
+ 460   6      //              Send_To_Midi_Out_Con(midi_struct->buffer[FW_SYSX_DATA_START+i] >> 4);
+ 461   6      //              Send_To_Midi_Out_Con(midi_struct->buffer[FW_SYSX_DATA_START+i] & 0x0F);
+ 462   6      //              Send_To_Midi_Out_Con(tmp3 >> 4);
+ 463   6      //              Send_To_Midi_Out_Con(tmp3 & 0x0F);      
+ 464   6      //              Send_To_Midi_Out_Con(0xF7);
+ 465   6                                              
+ 466   6                                                      // compare data read back with data written
+ 467   6                                                      if(tmp3 != midi_struct->buffer[FW_SYSX_DATA_START+i])
+ 468   6                                                      {
+ 469   7                                                              // a byte doesnt correspond to what was programmed : send ack error
+ 470   7                                                              result = 0;
+ 471   7                                                              break;
+ 472   7                                                      }
+ 473   6                                              }       
+ 474   5              
+ 475   5                                              // V1.4 disable rx1
+ 476   5                                              SCON1 &= 0xEF;          /* SCON1: mode 1, 8-bit UART, disable rcvr  */
+ 477   5      
+ 478   5                                      } // end prog z8
+ 479   4      
+ 480   4                                      // 10ms delay after ez or z8 programming
+ 481   4                                      //EZUSB_Delay(10);                      
+ 482   4      
+ 483   4                              } // end checksum ok
+ 484   3                      } // end program instead of terminate
+C51 COMPILER V8.15   BOOTLOADER                                                            12/02/2011 17:04:14 PAGE 9   
+
+ 485   2              } // end it was a good fw sysex
+ 486   1      
+ 487   1              // the whole sysex has now been treated
+ 488   1              // no circular buffer while upgrading firmware
+ 489   1      //      midi_struct->start_index        = 0;
+ 490   1      //      midi_struct->end_index          = 0;
+ 491   1      //      midi_struct->current_index      = 0;
+ 492   1              
+ 493   1              // Send acknoledge to host
+ 494   1              if(must_send_ack)
+ 495   1                      SendFwAcknoledge(result);       
+ 496   1      
+ 497   1      }
+ 498          
+ 499          // ***************************************************************************
+ 500          // Routine      : EEPROMWriteVerify()
+ 501          // Input        : 
+ 502          // Output       : None
+ 503          // Process      : 
+ 504          // ***************************************************************************
+ 505          BYTE EEPROMWriteVerify(WORD addr, BYTE length, BYTE xdata *buf)
+ 506          {
+ 507   1              BYTE            j;
+ 508   1              BYTE xdata      ee_str[3];
+ 509   1              BYTE xdata  data_to_verify;
+ 510   1              
+ 511   1              /*
+ 512   1              buf[0] = MSB(addr);     // address msb
+ 513   1              buf[1] = LSB(addr);     // address msb
+ 514   1              // all other datas are already in the buffer
+ 515   1          EZUSB_WriteI2C(I2C_Addr, length, buf);
+ 516   1              // now wait write complete
+ 517   1              //EZUSB_Delay(12);
+ 518   1              EZUSB_WaitForEEPROMWrite(I2C_Addr);
+ 519   1              //EZUSB_Delay(2);
+ 520   1              // re-set eeprom adress since it has been incremented
+ 521   1              EZUSB_WriteI2C(I2C_Addr, 2, buf);
+ 522   1      //      EZUSB_WaitForEEPROMWrite(I2C_Addr);
+ 523   1              // verify written datas 
+ 524   1              for(j=0;j<length;j++)
+ 525   1              {
+ 526   1                      // read back data written
+ 527   1                      EZUSB_ReadI2C(I2C_Addr, 0x01, &data_to_verify); 
+ 528   1                      // check if equal to data written before
+ 529   1                      if(data_to_verify != buf[j+2])
+ 530   1                              return(0);
+ 531   1                      //addr++;
+ 532   1              }
+ 533   1              // verif ok
+ 534   1              return(acknoledge_sysxid0);
+ 535   1      */              
+ 536   1              for(j=0;j<length;++j)
+ 537   1              {
+ 538   2                      ee_str[0] = MSB(addr);  // address msb
+ 539   2                      ee_str[1] = LSB(addr);  // address lsb
+ 540   2                      ee_str[2] = buf[j];             // byte to write
+ 541   2      
+ 542   2                      EZUSB_WriteI2C(I2C_Addr, 3, ee_str);
+ 543   2                      // wait 1ms before pooling write finish
+ 544   2                      //EZUSB_Delay(5);
+ 545   2                      //Check_Usb();
+ 546   2                      // now wait write complete
+C51 COMPILER V8.15   BOOTLOADER                                                            12/02/2011 17:04:14 PAGE 10  
+
+ 547   2                      EZUSB_WaitForEEPROMWrite(I2C_Addr);
+ 548   2                      // wait 1ms before re-reading data              
+ 549   2                      //EZUSB_Delay(8);
+ 550   2                      // re-set eeprom adress since it has been incremented
+ 551   2                      EZUSB_WriteI2C(I2C_Addr, 2, ee_str);
+ 552   2                      // read back data written
+ 553   2                      EZUSB_ReadI2C(I2C_Addr, 0x01, &data_to_verify); 
+ 554   2      
+ 555   2                      // check if equal to data written before
+ 556   2                      if(data_to_verify != buf[j])
+ 557   2                              return(0);
+ 558   2                      addr++;
+ 559   2              }
+ 560   1              // verif ok
+ 561   1              return(acknoledge_sysxid0);
+ 562   1      
+ 563   1      }
+ 564          
+ 565          // ***************************************************************************
+ 566          // Routine      : WriteSingleRegOCD()
+ 567          // Input        : 
+ 568          // Output       : None
+ 569          // Process      : 
+ 570          // ***************************************************************************
+ 571          void WriteSingleRegOCD(WORD address, BYTE value) 
+ 572          {
+ 573   1              Send_To_Serial_Z8(OCD_WRITE_REG_CMD);
+ 574   1              Send_To_Serial_Z8(address >> 8);
+ 575   1              Send_To_Serial_Z8(address & 0xFF);
+ 576   1              Send_To_Serial_Z8(1);
+ 577   1              Send_To_Serial_Z8(value);
+ 578   1              EZUSB_Delay(50);
+ 579   1      }
+ 580          
+ 581          // ***************************************************************************
+ 582          // Routine      : InitFlashFrqAndUnlock()
+ 583          // Input        : 
+ 584          // Output       : None
+ 585          // Process      : 
+ 586          // ***************************************************************************
+ 587          void InitFlashFrqAndUnlock(void)
+ 588          {
+ 589   1              // rst reg
+ 590   1              WriteSingleRegOCD(OCD_FLASH_CTR_REG_ADD, OCD_FLASH_CTR_REG_RESET);
+ 591   1              // Write flash frequency control regs high & low                                        
+ 592   1              WriteSingleRegOCD(OCD_FLASH_FREQ_REG_HIGH_ADD, OCD_Z8_FLASH_FREQ_REG >> 8);
+ 593   1              WriteSingleRegOCD(OCD_FLASH_FREQ_REG_LOW_ADD , OCD_Z8_FLASH_FREQ_REG & 0xFF);
+ 594   1              EZUSB_Delay(50);
+ 595   1              // unlock flash reg
+ 596   1              WriteSingleRegOCD(OCD_FLASH_CTR_REG_ADD, OCD_FLASH_FIRST_UNLOCK);
+ 597   1              WriteSingleRegOCD(OCD_FLASH_CTR_REG_ADD, OCD_FLASH_SECOND_UNLOCK);
+ 598   1              EZUSB_Delay(50);
+ 599   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1081    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----       4
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =      2      25
+   IDATA SIZE       =   ----    ----
+C51 COMPILER V8.15   BOOTLOADER                                                            12/02/2011 17:04:14 PAGE 11  
+
+   BIT SIZE         =      1       1
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

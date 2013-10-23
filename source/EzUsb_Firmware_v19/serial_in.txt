@@ -1,0 +1,197 @@
+PINSA=0x10;
+PINSB=0x30;
+
+signal void init_ez_from_z8(void) {
+s1in=0xFF; 
+twatch (5000);          
+s1in=0x00;
+twatch (5000);          
+s1in=0x2F;
+twatch (5000);          
+s1in=0xFE;
+twatch (5000); 
+
+s1in=0xFF; 
+twatch (5000);          
+s1in=0x01;
+twatch (5000);          
+s1in=0x10;
+twatch (5000);          
+s1in=0xFE;
+twatch (5000); 
+
+s1in=0xFF; 
+twatch (5000);          
+s1in=0x02;
+twatch (5000);          
+s1in=0x55;
+twatch (5000);          
+s1in=0xFE;
+twatch (5000); 
+}
+
+signal void receive_midi_from_z8(void) {
+s1in=0xFF; 
+twatch (5000);          
+s1in=0x3C;
+twatch (5000);          
+s1in=0x03;
+twatch (5000);          
+s1in=0xB0;
+twatch (5000); 
+s1in=0x11;
+twatch (5000); 
+s1in=0x12;
+twatch (5000); 
+s1in=0xFE;
+twatch (5000); 
+
+s1in=0xFF; 
+twatch (5000);          
+s1in=0x3C;
+twatch (5000);          
+s1in=0x03;
+twatch (5000);          
+s1in=0xB0;
+twatch (5000); 
+s1in=0x13;
+twatch (5000); 
+s1in=0x14;
+twatch (5000); 
+s1in=0xFE;
+twatch (5000); 
+
+s1in=0xFF; 
+twatch (5000);          
+s1in=0x3C;
+twatch (5000);          
+s1in=0x03;
+twatch (5000);          
+s1in=0xB0;
+twatch (5000); 
+s1in=0x15;
+twatch (5000); 
+s1in=0x16;
+twatch (5000); 
+s1in=0xFE;
+twatch (5000); 
+
+}
+
+signal void receive_sysex_from_con(void) {
+S0IN=0xF0; 
+twatch (5000);          
+S0IN=0x10;
+twatch (5000);          
+S0IN=0x20;
+twatch (5000);          
+S0IN=0x30;
+twatch (5000);          
+S0IN=0xF7;
+twatch (5000);
+}
+
+signal void receive_note_from_con(void) {
+S0IN=0x90; 
+twatch (5000);          
+S0IN=0x10;
+twatch (5000);          
+S0IN=0x10;
+twatch (5000);          
+}
+
+signal void receive_wid_sysex_from_con(void) {
+S0IN=0xF0; 
+twatch (5000);          
+S0IN=0x00;
+twatch (5000);          
+S0IN=0x20;
+twatch (5000);          
+S0IN=0x4F;
+twatch (5000);          
+S0IN=0x00;
+twatch (5000);          
+S0IN=0x01;
+twatch (5000);
+S0IN=0x1A;
+twatch (5000);
+S0IN=0x20;
+twatch (5000);
+S0IN=0x00;
+twatch (5000);
+S0IN=0x13;
+twatch (5000);
+S0IN=0x70;
+twatch (5000);
+S0IN=0x5E;
+twatch (5000);
+S0IN=0x57;
+twatch (5000);
+S0IN=0x51;
+twatch (5000);
+S0IN=0x52;
+twatch (5000);
+S0IN=0x55;
+twatch (5000);
+S0IN=0x50;
+twatch (5000);
+S0IN=0x56;
+twatch (5000);
+S0IN=0x54;
+twatch (5000);
+S0IN=0x57;
+twatch (5000);
+S0IN=0x54;
+twatch (5000);
+S0IN=0x55;
+twatch (5000);
+S0IN=0x55;
+twatch (5000);
+S0IN=0x55;
+twatch (5000);
+S0IN=0x55;
+twatch (5000);
+S0IN=0x55;
+twatch (5000);
+S0IN=0x56;
+twatch (5000);
+S0IN=0x5A;
+twatch (5000);
+S0IN=0x5A;
+twatch (5000);
+S0IN=0x55;
+twatch (5000);
+S0IN=0x55;
+twatch (5000);
+S0IN=0x55;
+twatch (5000);
+S0IN=0x55;
+twatch (5000);
+S0IN=0x55;
+twatch (5000);
+S0IN=0x57;
+twatch (5000);
+S0IN=0x55;
+twatch (5000);
+S0IN=0x55;
+twatch (5000);
+S0IN=0x57;
+twatch (5000);
+S0IN=0x53;
+twatch (5000);
+S0IN=0x5C;
+twatch (5000);
+S0IN=0x55;
+twatch (5000);
+S0IN=0x52;
+twatch (5000);
+S0IN=0x5A;
+twatch (5000);
+S0IN=0x36;
+twatch (5000);
+S0IN=0xF7;
+twatch (5000); 
+}
+/*
+
+*/

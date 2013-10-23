@@ -1,0 +1,116 @@
+A51 MACRO ASSEMBLER  USBJMPTB                                                             12/02/2011 17:04:12 PAGE     1
+
+
+MACRO ASSEMBLER A51 V8.01
+OBJECT MODULE PLACED IN USBJmpTb.OBJ
+ASSEMBLER INVOKED BY: C:\Program Files\Keil\C51\BIN\A51.EXE USBJmpTb.a51 INCDIR(..\..\common_z8_ez) SET(SMALL) EP
+
+LOC  OBJ            LINE     SOURCE
+
+                       1     NAME            USBJmpTbl
+                       2     
+                       3     extrn           code (ISR_Sudav, ISR_Sof, ISR_Sutok, ISR_Susp, ISR_Ures, ISR_IBN, ISR_Ep0in
+                             , ISR_Ep0out, ISR_Ep1in, ISR_Ep1out, ISR_Ep2in, ISR_Ep2out, ISR_Ep3in, ISR_Ep3out, ISR_Ep4i
+                             n, ISR_Ep4out, ISR_Ep5in, ISR_Ep5out, ISR_Ep6in, ISR_Ep6out, ISR_Ep7in, ISR_Ep7out)
+                       4     public          USB_AutoVector, USB_Jump_Table
+                       5     ;------------------------------------------------------------------------------
+                       6     ; Interrupt Vectors
+                       7     ;------------------------------------------------------------------------------
+----                   8                     CSEG    AT 43H
+  0045                 9     USB_AutoVector  equ     $ + 2
+0043 020000   F       10                     ljmp    USB_Jump_Table  ; Autovector will replace byte 45
+                      11     ;------------------------------------------------------------------------------
+                      12     ; USB Jump Table
+                      13     ;------------------------------------------------------------------------------
+                      14     ?PR?USB_JUMP_TABLE?USBJT        segment code page       ; Place jump table on a page bounda
+                             ry
+----                  15                     RSEG    ?PR?USB_JUMP_TABLE?USBJT        ; autovector jump table
+0000                  16     USB_Jump_Table: 
+0000 020000   F       17                     ljmp    ISR_Sudav       ; Setup Data Available
+0003 00               18                     db      0               
+0004 020000   F       19                     ljmp    ISR_Sof ; Start of Frame
+0007 00               20                     db      0
+0008 020000   F       21                     ljmp    ISR_Sutok       ; Setup Data Loading
+000B 00               22                     db      0
+000C 020000   F       23                     ljmp    ISR_Susp        ; Global Suspend
+000F 00               24                     db      0
+0010 020000   F       25                     ljmp    ISR_Ures        ; USB Reset     
+0013 00               26                     db      0
+0014 020000   F       27                     ljmp    ISR_IBN     ; IN Bulk NAK interrupt
+0017 00               28                     db      0
+0018 020000   F       29                     ljmp    ISR_Ep0in       ; End Point 0 In
+001B 00               30                     db      0
+001C 020000   F       31                     ljmp    ISR_Ep0out      ; End Point 0 Out
+001F 00               32                     db      0
+0020 020000   F       33                     ljmp    ISR_Ep1in       ; End Point 1 In
+0023 00               34                     db      0
+0024 020000   F       35                     ljmp    ISR_Ep1out      ; End Point 1 Out
+0027 00               36                     db      0
+0028 020000   F       37                     ljmp    ISR_Ep2in
+002B 00               38                     db      0
+002C 020000   F       39                     ljmp    ISR_Ep2out
+002F 00               40                     db      0
+0030 020000   F       41                     ljmp    ISR_Ep3in
+0033 00               42                     db      0
+0034 020000   F       43                     ljmp    ISR_Ep3out
+0037 00               44                     db      0
+0038 020000   F       45                     ljmp    ISR_Ep4in
+003B 00               46                     db      0
+003C 020000   F       47                     ljmp    ISR_Ep4out
+003F 00               48                     db      0
+0040 020000   F       49                     ljmp    ISR_Ep5in
+0043 00               50                     db      0
+0044 020000   F       51                     ljmp    ISR_Ep5out
+0047 00               52                     db      0
+0048 020000   F       53                     ljmp    ISR_Ep6in
+004B 00               54                     db      0
+004C 020000   F       55                     ljmp    ISR_Ep6out
+A51 MACRO ASSEMBLER  USBJMPTB                                                             12/02/2011 17:04:12 PAGE     2
+
+004F 00               56                     db      0
+0050 020000   F       57                     ljmp    ISR_Ep7in
+0053 00               58                     db      0
+0054 020000   F       59                     ljmp    ISR_Ep7out
+0057 00               60                     db      0
+                      61     ;
+                      62                     end
+A51 MACRO ASSEMBLER  USBJMPTB                                                             12/02/2011 17:04:12 PAGE     3
+
+SYMBOL TABLE LISTING
+------ ----- -------
+
+
+N A M E                   T Y P E  V A L U E   ATTRIBUTES
+
+?PR?USB_JUMP_TABLE?USBJT  C SEG    0058H       REL=PAGE
+ISR_EP0IN. . . . . . . .  C ADDR   -----       EXT
+ISR_EP0OUT . . . . . . .  C ADDR   -----       EXT
+ISR_EP1IN. . . . . . . .  C ADDR   -----       EXT
+ISR_EP1OUT . . . . . . .  C ADDR   -----       EXT
+ISR_EP2IN. . . . . . . .  C ADDR   -----       EXT
+ISR_EP2OUT . . . . . . .  C ADDR   -----       EXT
+ISR_EP3IN. . . . . . . .  C ADDR   -----       EXT
+ISR_EP3OUT . . . . . . .  C ADDR   -----       EXT
+ISR_EP4IN. . . . . . . .  C ADDR   -----       EXT
+ISR_EP4OUT . . . . . . .  C ADDR   -----       EXT
+ISR_EP5IN. . . . . . . .  C ADDR   -----       EXT
+ISR_EP5OUT . . . . . . .  C ADDR   -----       EXT
+ISR_EP6IN. . . . . . . .  C ADDR   -----       EXT
+ISR_EP6OUT . . . . . . .  C ADDR   -----       EXT
+ISR_EP7IN. . . . . . . .  C ADDR   -----       EXT
+ISR_EP7OUT . . . . . . .  C ADDR   -----       EXT
+ISR_IBN. . . . . . . . .  C ADDR   -----       EXT
+ISR_SOF. . . . . . . . .  C ADDR   -----       EXT
+ISR_SUDAV. . . . . . . .  C ADDR   -----       EXT
+ISR_SUSP . . . . . . . .  C ADDR   -----       EXT
+ISR_SUTOK. . . . . . . .  C ADDR   -----       EXT
+ISR_URES . . . . . . . .  C ADDR   -----       EXT
+USBJMPTBL. . . . . . . .  N NUMB   -----       
+USB_AUTOVECTOR . . . . .  N NUMB   0045H   A   
+USB_JUMP_TABLE . . . . .  C ADDR   0000H   R   SEG=?PR?USB_JUMP_TABLE?USBJT
+
+
+REGISTER BANK(S) USED: 0 
+
+
+ASSEMBLY COMPLETE.  0 WARNING(S), 0 ERROR(S)

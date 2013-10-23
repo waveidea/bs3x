@@ -1,0 +1,467 @@
+C51 COMPILER V8.15   SERIAL                                                                12/02/2011 17:04:13 PAGE 1   
+
+
+C51 COMPILER V8.15, COMPILATION OF MODULE SERIAL
+OBJECT MODULE PLACED IN serial.OBJ
+COMPILER INVOKED BY: C:\Program Files\Keil\C51\BIN\C51.EXE serial.c OPTIMIZE(9,SPEED) INCDIR(C:\backup_jd\midictrl\BSP_V
+                    -ERSION_2\firmware\common_z8_ez\;..\..\common_z8_ez) DEFINE(EZ_COMPIL)
+
+line level    source
+
+   1          //#pragma NOIV  // Do not generate interrupt vectors
+   2           
+   3          // **************************** SERIAL.C *********************************
+   4          // All code relating to serial ports 0 and 1
+   5          // ***********************************************************************
+   6          
+   7          #include <ezusb.h>
+   8          #include <ezregs.h>
+   9          #include "pins_def.h"
+  10          #include "common_def.h"
+  11          #include <common_z8_ez.h>
+  12          #include "macros.inc"
+  13          #include "serial.h"
+  14          #include "bootloader.h"
+  15          #include "itr.h"
+  16          
+  17          // GLOBAL VARS
+  18          idata unsigned char TX_To_Midi_Out_Con_Buff[SERIAL_TX_BUFF_LENGTH];
+  19          xdata unsigned char TX_To_Serial_Z8_Buff[SERIAL_TX_BUFF_LENGTH]; // V1.8 idata
+  20          
+  21          unsigned char tx_to_midi_out_con_start_index;
+  22          unsigned char tx_to_midi_out_con_end_index;
+  23          bit tx_to_midi_out_con_busy;
+  24          bit tx_to_midi_out_con_full;
+  25          
+  26          unsigned char tx_to_serial_z8_start_index;
+  27          unsigned char tx_to_serial_z8_end_index;
+  28          bit tx_to_serial_z8_busy;
+  29          bit tx_to_serial_z8_full;
+  30          
+  31          // FROM MAIN.C
+  32          extern xdata Midi_In_Struct  MIDI_In_From_Con, MIDI_In_From_Usb;
+  33          extern bit must_start_bootloader_from_ez0_bit;
+  34          extern bit ez_fw_midi_to_z8_z_ez1_bit;
+  35          // V1.5 extern bit arpp_state_z_ez1_bit;
+  36          // V1.5 extern bit arpp_midi_src_z_ez1_bit;
+  37          
+  38          // FROM IDENTITY.C
+  39          extern unsigned char code identity[];
+  40          
+  41          // FROM BOOTLER.C
+  42          extern volatile BYTE bootloader_state;
+  43          extern BYTE fw_bl_src;
+  44          
+  45          unsigned char code wid_sysex_header[] = {
+  46          MIDI_SOX, WID_SYX_ID0, WID_SYX_ID1, WID_SYX_ID2, WID_SYX_ID3, WID_SYX_ID4 
+  47          };
+  48          
+  49          /* ******************************************************************** */
+  50          /* Routine: Init_Serial_Ports                                                                                   */
+  51          /* Process: SERIAL PORT 0 & 1 INITIALIZATIONS, based on 24Mhz Xtal              */
+  52          /* Inputs:      None                                                                                                            */
+  53          /* Outputs:     None                                                                                                            */
+  54          /* Process: Serial ports 0 uses Timer 2 @ 31250 b/sec                                   */
+C51 COMPILER V8.15   SERIAL                                                                12/02/2011 17:04:13 PAGE 2   
+
+  55          /*                      Serial ports 1 uses Timer 1 @ 57600 b/sec                                       */
+  56          /* ******************************************************************** */
+  57          void Init_Serial_Ports(void)
+  58          {
+  59   1      
+  60   1      //             K * 24 000 000
+  61   1      //Baud-Rate= ------------------------ = ((SMOD[7]+1) * 62500) / (256-TH1)
+  62   1      //             32 * 12 * (256- TH1) 
+  63   1      
+  64   1              // TIMERS 0 & 1 COMMON
+  65   1          TMOD  = 0x21;                       // TMOD: timer 1, mode 2, 8-bit reload 
+  66   1                                                                      //               timer 0, mode 1, 16bits counter 
+  67   1      
+  68   1              // TIMER O : 2ms counter
+  69   1          TH0  = (TIMER0_RELOAD >> 8);                // Setup reload value
+  70   1          TL0  = (TIMER0_RELOAD & 0xFF);              // Setup overflow value
+  71   1              ET0  = 1;                                                       // enable timer 0 interrupt    
+  72   1              TR0  = 0;                               // TR0:  timer 0 is off for now
+  73   1      
+  74   1              // TIMER 1 : BAUD RATE GENERATOR FOR SERIAL PORTS 1
+  75   1          // 62500 Bauds rate registers
+  76   1      //V1.2    TH1  = 256-SERIAL_TO_Z8_BAUD_RELOAD;          // Setup Baudrate reload value
+  77   1      //V1.2    TL1  = 256-SERIAL_TO_Z8_BAUD_RELOAD;          // Setup Baudrate overflow value
+  78   1          TH1  = 256-SERIAL_TO_OCD_Z8_BAUD_RELOAD;    // Setup Baudrate reload value
+  79   1          TL1  = 256-SERIAL_TO_OCD_Z8_BAUD_RELOAD;    // Setup Baudrate overflow value
+  80   1          TCON = 0x40;                                                        // clear timer 1 itrs flags 
+  81   1      //      TR1  = 1;                                       // TR1:  timer 1 run
+  82   1              
+  83   1      
+  84   1              // TIMER 2 : BAUD RATE GENERATOR FOR SERIAL PORTS 0
+  85   1          // 32150 Bauds rate registers
+  86   1      //    TH2       = MSB(MIDI_OUT_1_BAUD_RELOAD);  // Setup Baudrate reload value
+  87   1      //    TL2       = LSB(MIDI_OUT_1_BAUD_RELOAD);  // Setup Baudrate overflow value
+  88   1          RCAP2H  = MSB(MIDI_OUT_1_BAUD_RELOAD);      // Setup Baudrate reload value
+  89   1          RCAP2L  = LSB(MIDI_OUT_1_BAUD_RELOAD);      // Setup Baudrate overflow value
+  90   1              T2CON = 0x34;                                                   // Set timer 2 for serial port 0
+  91   1      //    TR2  = 1;                                         // TR2:  timer 2 is on
+  92   1      
+  93   1              // Configure serial port 0 registers
+  94   1              PCON  |= 0x80;      /* SMOD0=1 baud rate double enabled */
+  95   1              SCON0 = 0x50;           /* SCON: mode 1, 8-bit UART, enable rcvr (0x50) */
+  96   1      
+  97   1              // Configure serial port 1 registers
+  98   1              EICON |= 0x80;      /* SMOD1=1 baud rate double enabled */
+  99   1              SCON1 = 0x50;           /* SCON1: mode 1, 8-bit UART, enable rcvr (0x50) */
+ 100   1      
+ 101   1              // Turn on serial port 0 : TO/FROM MIDI IN / OUT1 CONNECTORS
+ 102   1              ES0 = 1;                        /* enable serial port 0 interrupts */
+ 103   1              // Turn on serial port 1 : TO/FROM Z8 SERIAL PORT
+ 104   1              ES1 = 1;                        /* enable serial port 1 interrupts */
+ 105   1      }
+ 106          
+ 107          // ***************************************************************************
+ 108          // Routine      : Send_To_Midi_Out_Con()
+ 109          // Input        : data_to_send
+ 110          // Output       : None
+ 111          // Process      : Send a single byte to MIDI Out connector
+ 112          // ***************************************************************************
+ 113          void Send_To_Midi_Out_Con(BYTE data_to_send)
+ 114          {
+ 115   1              while( tx_to_midi_out_con_full );
+ 116   1      
+C51 COMPILER V8.15   SERIAL                                                                12/02/2011 17:04:13 PAGE 3   
+
+ 117   1              EA = 0; // Disable 8051 Interrupts
+ 118   1      
+ 119   1              if( !tx_to_midi_out_con_busy )
+ 120   1              {
+ 121   2                      tx_to_midi_out_con_busy = TRUE;
+ 122   2                      SBUF0 = data_to_send;
+ 123   2          }
+ 124   1          else 
+ 125   1              {
+ 126   2                      TX_To_Midi_Out_Con_Buff[tx_to_midi_out_con_end_index++ & (SERIAL_TX_BUFF_LENGTH-1)] = data_to_send;
+ 127   2                      if( ((tx_to_midi_out_con_end_index ^ tx_to_midi_out_con_start_index) & (SERIAL_TX_BUFF_LENGTH-1)) == 0 )
+ 128   2                              tx_to_midi_out_con_full = TRUE;
+ 129   2          }   
+ 130   1      
+ 131   1              EA = 1; // Re-Enable 8051 interrupts
+ 132   1      }
+ 133          
+ 134          // ***************************************************************************
+ 135          // Routine      : Check_MIDI_Buff_Send_To_Z8_Board()
+ 136          // Input        : 
+ 137          // Output       : None
+ 138          // Process      : Send MIDI In buffer OR USB In Buffer to Z8 if 
+ 139          //                              - BS3X dedicated incoming sysex
+ 140          //                              - arpp or mackie or logic control is On and not a sysex has been received
+ 141          // ***************************************************************************
+ 142          void Check_MIDI_Buff_Send_To_Z8_Board(Midi_In_Struct *midi_struct, BYTE end_index_local)
+ 143          {
+ 144   1              BYTE start_index_local;
+ 145   1      //      BYTE end_index_local;
+ 146   1              BYTE midi_mess_size;
+ 147   1              BYTE midi_mess_first_byte;
+ 148   1              BYTE sysex_index;
+ 149   1              BYTE tmp;
+ 150   1              bit /*v1.1 must_send_midi_to_z8,*/ must_send_sysex_to_z8, must_send_to_z8;
+ 151   1      
+ 152   1              start_index_local = midi_struct->start_index;
+ 153   1      //      EA = 0;
+ 154   1      //      end_index_local   = midi_struct->end_index;
+ 155   1      //      EA = 1;
+ 156   1      
+ 157   1              //v1.1 if(start_index_local == end_index_local) return;
+ 158   1              while(start_index_local != end_index_local)
+ 159   1              {
+ 160   2                      //v1.1 must_send_midi_to_z8     = FALSE;
+ 161   2                      must_send_sysex_to_z8   = FALSE;
+ 162   2                      must_send_to_z8                 = FALSE;
+ 163   2              
+ 164   2                      // v1.1 copy first midi byte to a local memory
+ 165   2                      midi_mess_first_byte    = midi_struct->buffer[start_index_local];
+ 166   2                      EA=0;
+ 167   2                      midi_mess_size = Get_MIDI_Msg_Size(midi_mess_first_byte) + 1;
+ 168   2                      EA=1;   
+ 169   2                      
+ 170   2                      // a sysex is into the buffer ?
+ 171   2                      if(midi_mess_size == 0)         
+ 172   2                      {
+ 173   3                              sysex_index = start_index_local;
+ 174   3                              while( (midi_struct->buffer[sysex_index] != MIDI_EOX) && (sysex_index != end_index_local))
+ 175   3                              {
+ 176   4                                      midi_mess_size++;
+ 177   4                                      sysex_index = (sysex_index + 1)&(MIDI_IN_FROM_CON_BUFF_LENGHT-1);
+ 178   4                              }
+C51 COMPILER V8.15   SERIAL                                                                12/02/2011 17:04:13 PAGE 4   
+
+ 179   3                              midi_mess_size++;
+ 180   3                      }
+ 181   2      
+ 182   2                      // Check if BSP SYSEX 
+ 183   2              /*      if(midi_struct->buffer[start_index_local]                                                                       == MIDI_SOX)
+ 184   2                      if(midi_struct->buffer[(start_index_local+1)&(MIDI_IN_FROM_CON_BUFF_LENGHT-1)]  == WID_SYX_ID0) 
+ 185   2                      if(midi_struct->buffer[(start_index_local+2)&(MIDI_IN_FROM_CON_BUFF_LENGHT-1)]  == WID_SYX_ID1) 
+ 186   2                      if(midi_struct->buffer[(start_index_local+3)&(MIDI_IN_FROM_CON_BUFF_LENGHT-1)]  == WID_SYX_ID2) 
+ 187   2                      if(midi_struct->buffer[(start_index_local+4)&(MIDI_IN_FROM_CON_BUFF_LENGHT-1)]  == WID_SYX_ID3) 
+ 188   2                      if(midi_struct->buffer[(start_index_local+5)&(MIDI_IN_FROM_CON_BUFF_LENGHT-1)]  == WID_SYX_ID4)
+ 189   2              */
+ 190   2                      // Check it is a wid dedicated sysex (check if all wid sysex header is present)
+ 191   2                      sysex_index = 0;        
+ 192   2                      while((midi_struct->buffer[(start_index_local + sysex_index)&(MIDI_IN_FROM_CON_BUFF_LENGHT-1)] 
+ 193   2                                      == wid_sysex_header[sysex_index]) && (sysex_index < WID_SYX_HEADER_SIZE))
+ 194   2                                      sysex_index++;
+ 195   2              
+ 196   2                      // a whole wid sysex header was in the buffer ?
+ 197   2                      if(sysex_index == WID_SYX_HEADER_SIZE)
+ 198   2                      {
+ 199   3                              // also check this sysex is an incoming sysex for the 3X, as opposed to a outgoing sysex
+ 200   3                              if(!(midi_struct->buffer[(start_index_local+WID_SYX_HEADER_SIZE)&(MIDI_IN_FROM_CON_BUFF_LENGHT-1)] & sy
+             -sex_direction_sysxid0))
+ 201   3                              {
+ 202   4                                      // check if eox present
+ 203   4                                      //v1.1 if(midi_struct->buffer[(end_index_local-1)&(MIDI_IN_FROM_CON_BUFF_LENGHT-1)]     == MIDI_EOX)
+ 204   4                                      if(midi_struct->buffer[(start_index_local+midi_mess_size-1)&(MIDI_IN_FROM_CON_BUFF_LENGHT-1)]   == MIDI_
+             -EOX)
+ 205   4                                      {
+ 206   5                                                      /////////////////////////// It is a Wave Idea BS3X INCOMING SYSEX //////////////////////////////////
+             -//
+ 207   5                                                      
+ 208   5                                                      // are we bootloading ? NO : Check if must start bootloader OR forward this sysex to Z8 board
+ 209   5                                                      if(bootloader_state == BOOTLOADER_OFF)
+ 210   5                                                      {
+ 211   6                                                              // Check if must start bootloader while we are in normal mode
+ 212   6                                                              if( (midi_struct->buffer[(start_index_local+WID_SYX_HEADER_SIZE)&(MIDI_IN_FROM_CON_BUFF_LENGHT-1)] 
+             -== (/*v1.1 FRAME_IS_FIRMWARE*/FRAME_IS_FIRMWARE_OR_PURE_MIDI | acknoledge_sysxid0 | checksum_check_sysxid0))
+ 213   6                                                                // data lenght = 127 is used to start bootloader
+ 214   6                                                                &&(midi_struct->buffer[(start_index_local+WID_SYX_HEADER_SIZE+1)&(MIDI_IN_FROM_CON_BUFF_LENGHT-1)
+             -] == DATA_LENGHT_START_BOOTLOADER) )
+ 215   6                                                                      // flag the bootloader to start it and exit
+ 216   6                                                                      must_start_bootloader_from_ez0_bit = TRUE;
+ 217   6                                                              // send to z8 this incoming sysex
+ 218   6                                                              else
+ 219   6                                                              {
+ 220   7                                                                      must_send_sysex_to_z8 = TRUE; // it is a non bootloader wid sysex
+ 221   7                                                                      must_send_to_z8 = TRUE;
+ 222   7                                                              }
+ 223   6                                                      } // end normal mode
+ 224   5                                                      else
+ 225   5                                                  /////////////////////////// HERE WE ARE IN BOOTLOADER MODE /////////////////////////
+ 226   5                                                      //if(bootloader_state == WAIT_FW_DATA)
+ 227   5                                                      {
+ 228   6                                                              //DEBUGJDS turn on USB led
+ 229   6                                                              USB_LED_PORT_OUT |= USB_LED_PIN;
+ 230   6                              
+ 231   6                                                              // determine the bootloader source if not yet known
+ 232   6                                                              if(fw_bl_src == FW_BL_SRC_UNKNOWN)
+ 233   6                                                              {
+ 234   7                                                                      if((Midi_In_Struct *) midi_struct == (Midi_In_Struct *) &MIDI_In_From_Usb)
+ 235   7                                                                              fw_bl_src = FW_BL_SRC_USB_IN;
+C51 COMPILER V8.15   SERIAL                                                                12/02/2011 17:04:13 PAGE 5   
+
+ 236   7                                                                      else
+ 237   7                                                                              fw_bl_src = FW_BL_SRC_MIDI_IN;
+ 238   7                                                              }
+ 239   6                              
+ 240   6                                                              // BOOTLOADER MODE SYSEX RECEIVED
+ 241   6                                                              DecodeFirmwareSysex(midi_struct);
+ 242   6                              
+ 243   6                                                              USB_LED_PORT_OUT &= ~USB_LED_PIN;
+ 244   6                              
+ 245   6                                                              // the whole sysex has now been treated
+ 246   6                                                              // no circular buffer while upgrading firmware
+ 247   6                                                              midi_struct->start_index        = 0;
+ 248   6                                                              midi_struct->end_index          = 0;
+ 249   6                                                              midi_struct->current_index      = 0;
+ 250   6                                                              
+ 251   6                                                              return;
+ 252   6                                                      }       // end bootloader mode;
+ 253   5                                      } // end eox present
+ 254   4                              } // end incoming wid sysex
+ 255   3                      } // end it was a wid sysex (header fully recognized)
+ 256   2                              
+ 257   2                      
+ 258   2                      // send all midi to z8 if arpeggio on and src corresponding enabled
+ 259   2                      // if sysex_index is different than 0 then another NON-wid sysex has been received, do not forward it to
+             - z8
+ 260   2                      // if it was a wid sysex ignore the following
+ 261   2                      if(!must_send_sysex_to_z8)      // it was not a wid sysex
+ 262   2                      {
+ 263   3      // V1.5                 if(!sysex_index)                // it was not a sysex at all (F0 was not the first byte)
+ 264   3      // V1.5                 {
+ 265   3                                      // V1.5 if(arpp_state_z_ez1_bit)        // the arpp is ON
+ 266   3                                      if(ez_fw_midi_to_z8_z_ez1_bit)  // Z8 wants to receive all MIDI events (arpp is on or mackie control en
+             -abled)
+ 267   3                                      {
+ 268   4                                              must_send_to_z8 = TRUE; // V1.5
+ 269   4      
+ 270   4      /*                                      // v1.1 send to z8 arpp only if note on or note off
+ 271   4                                              if( (midi_mess_first_byte <= (MIDI_NOTE_ON + 0x0F)) &&
+ 272   4                                                      (midi_mess_first_byte >= MIDI_NOTE_OFF) )
+ 273   4                                              {
+ 274   4                                                      // are we treating the selected arpeggio source input
+ 275   4                                                      if((Midi_In_Struct *) midi_struct == (Midi_In_Struct *) &MIDI_In_From_Usb)
+ 276   4                                                      {
+ 277   4                                                              // we are treating the usb in buffer here
+ 278   4                                                              if(arpp_midi_src_z_ez1_bit)
+ 279   4                                                              {
+ 280   4                                                                      //v1.1 must_send_midi_to_z8 = TRUE;
+ 281   4                                                                      must_send_to_z8 = TRUE;
+ 282   4                                                              }
+ 283   4                                                      }
+ 284   4                                                      else
+ 285   4                                                      // v1.1 the following line should not be necessary, anyway ...
+ 286   4                                                      //if((Midi_In_Struct *) midi_struct == (Midi_In_Struct *) &MIDI_In_From_Con)
+ 287   4                                                      {
+ 288   4                                                              // we are treating the midi in buffer here
+ 289   4                                                              if(!arpp_midi_src_z_ez1_bit)
+ 290   4                                                              {
+ 291   4                                                                      //v1.1 must_send_midi_to_z8 = TRUE;
+ 292   4                                                                      must_send_to_z8 = TRUE;
+ 293   4                                                              }
+ 294   4                                                      }
+ 295   4                                              } // end it was a note on/off
+C51 COMPILER V8.15   SERIAL                                                                12/02/2011 17:04:13 PAGE 6   
+
+ 296   4      */
+ 297   4                                      } // end Z8 wants to received all MIDI events
+ 298   3      // V1.5         } // end it was not a sysex at all
+ 299   3      //                      else
+ 300   3                                      // it was a NON wid sysex : do not forward to z8 and return 
+ 301   3      //                              return;
+ 302   3                      } // end it was not a wid sysex
+ 303   2              
+ 304   2                      // do data have to be forwarded to z8 board ?
+ 305   2                      if(must_send_to_z8)
+ 306   2                      {
+ 307   3                              // First send header bytes to Z8 board, SOF
+ 308   3                              Send_To_Serial_Z8(SOF_TO_EZ);
+ 309   3                              
+ 310   3                              // a wid sysex has to be forwarded to z8; skip sysex header 
+ 311   3                              if(must_send_sysex_to_z8)
+ 312   3                              {
+ 313   4                                      // then next byte to send is the usefull bytes of received sysex skip (f0 00 20 4f 00 01 )
+ 314   4                                      start_index_local = (start_index_local + WID_SYX_HEADER_SIZE)&(MIDI_IN_FROM_CON_BUFF_LENGHT-1);
+ 315   4                                      // skip eox f7
+ 316   4                                      // v1.1 end_index_local   =     (end_index_local-1)&(MIDI_IN_FROM_CON_BUFF_LENGHT-1);
+ 317   4                                      // a sysex is present, loop will end when byte = EOX, set the loop val to its maximum
+ 318   4                                      midi_mess_size = midi_mess_size - WID_SYX_HEADER_SIZE - 1;
+ 319   4      
+ 320   4                              } // end must forward a sysex
+ 321   3                              else
+ 322   3                              {
+ 323   4                                      // must send pure midi to Z8 board (id = 2)
+ 324   4                                      // V1.5 also indicates to Z8 the MIDI In source (USB or MIDI in connector)
+ 325   4                                      tmp = FRAME_IS_FIRMWARE_OR_PURE_MIDI;
+ 326   4                                      if((Midi_In_Struct *) midi_struct == (Midi_In_Struct *) &MIDI_In_From_Usb)
+ 327   4                                              tmp |= pure_midi_from_usb_sysxid0;
+ 328   4                                      
+ 329   4                                      Send_To_Serial_Z8(tmp); 
+ 330   4                              }
+ 331   3      
+ 332   3                              // Then send all bytes, skip eox
+ 333   3                              //v1.1 while(start_index_local != end_index_local)
+ 334   3                              // use sysex_index since not anymore used in this loop
+ 335   3                              sysex_index = (start_index_local + midi_mess_size)&(MIDI_IN_FROM_CON_BUFF_LENGHT-1);
+ 336   3                              while( start_index_local != sysex_index)
+ 337   3                              {
+ 338   4                                      // Forward midi bytes to Z8 board
+ 339   4                                      Send_To_Serial_Z8(midi_struct->buffer[start_index_local]);
+ 340   4                                      // inc index
+ 341   4                                      start_index_local =  (start_index_local + 1) & (MIDI_IN_FROM_CON_BUFF_LENGHT - 1);
+ 342   4                              }
+ 343   3                                              
+ 344   3                              // a wid sysex has to be forwarded to z8; skip sysex header 
+ 345   3                              if(must_send_sysex_to_z8)
+ 346   3                                      // skip eox
+ 347   3                                      start_index_local =  (start_index_local + 1) & (MIDI_IN_FROM_CON_BUFF_LENGHT - 1);
+ 348   3      
+ 349   3                              // Finish by sending end of frame EOF bytes to Z8 board
+ 350   3                              Send_To_Serial_Z8(EOF_TO_EZ);
+ 351   3                      }
+ 352   2                      else
+ 353   2                              start_index_local =  (start_index_local + midi_mess_size) & (MIDI_IN_FROM_CON_BUFF_LENGHT - 1);                 
+ 354   2              }
+ 355   1      
+ 356   1              // This buffer has now been processed, update circular pointer
+ 357   1              // this is done into the caller
+C51 COMPILER V8.15   SERIAL                                                                12/02/2011 17:04:13 PAGE 7   
+
+ 358   1              // midi_struct->start_index = start_index_local;
+ 359   1              
+ 360   1      }
+ 361          
+ 362          // ***************************************************************************
+ 363          // Routine      : Send_To_Serial_Z8()
+ 364          // Input        : data_to_send
+ 365          // Output       : None
+ 366          // Process      : Send a single byte to TX2 (bsp z8 board)
+ 367          // ***************************************************************************
+ 368          void Send_To_Serial_Z8(BYTE data_to_send)
+ 369          {
+ 370   1              while( tx_to_serial_z8_full );
+ 371   1      
+ 372   1              EA = 0; // Disable 8051 Interrupts
+ 373   1      
+ 374   1              if( !tx_to_serial_z8_busy )
+ 375   1              {
+ 376   2                      tx_to_serial_z8_busy = TRUE;
+ 377   2                      SBUF1 = data_to_send;
+ 378   2          }
+ 379   1          else 
+ 380   1              {
+ 381   2                      TX_To_Serial_Z8_Buff[tx_to_serial_z8_end_index++ & (SERIAL_TX_BUFF_LENGTH-1)] = data_to_send;
+ 382   2                      if( ((tx_to_serial_z8_end_index ^ tx_to_serial_z8_start_index) & (SERIAL_TX_BUFF_LENGTH-1)) == 0 )
+ 383   2                              tx_to_serial_z8_full = TRUE;
+ 384   2          }   
+ 385   1      
+ 386   1              EA = 1; // Re-Enable 8051 interrupts
+ 387   1      
+ 388   1      }
+ 389          
+ 390          // ***************************************************************************
+ 391          // Routine      : Send_Single_Framed_byte_To_Z8()
+ 392          // Input        : 
+ 393          // Output       : None
+ 394          // Process      : Send a single byte to Z8 board, byte is framed
+ 395          //                        v1.1 : this function always sends a FRAME_IS_COMMON_PARAM byte
+ 396          // ***************************************************************************
+ 397          void Send_Single_Framed_byte_To_Z8(/*v1.1 BYTE SYSEX_ID0,*/ BYTE SYSEX_ID2, BYTE byte_to_send)
+ 398          {
+ 399   1              // First send header bytes to Z8 board, SOF
+ 400   1              Send_To_Serial_Z8(SOF_TO_EZ);
+ 401   1              
+ 402   1              // Now send frame type
+ 403   1      //v1.1  Send_To_Serial_Z8(SYSEX_ID0);
+ 404   1               Send_To_Serial_Z8(FRAME_IS_COMMON_PARAM);
+ 405   1              
+ 406   1              // Now send lenght (unnecessary in fact) (always 1 for single byte)
+ 407   1              Send_To_Serial_Z8(0x01);
+ 408   1      
+ 409   1              // Now send address
+ 410   1              Send_To_Serial_Z8(SYSEX_ID2);
+ 411   1      
+ 412   1              // Now send dummy : always 0 for single byte
+ 413   1              Send_To_Serial_Z8(0);
+ 414   1      
+ 415   1              // Now send data
+ 416   1              Send_To_Serial_Z8(byte_to_send);
+ 417   1      
+ 418   1              // Now send end of frame
+ 419   1              Send_To_Serial_Z8(EOF_TO_EZ);
+C51 COMPILER V8.15   SERIAL                                                                12/02/2011 17:04:13 PAGE 8   
+
+ 420   1      
+ 421   1      }
+ 422          
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    613    ----
+   CONSTANT SIZE    =      6    ----
+   XDATA SIZE       =     64    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =      4       7
+   IDATA SIZE       =     64    ----
+   BIT SIZE         =      4       2
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

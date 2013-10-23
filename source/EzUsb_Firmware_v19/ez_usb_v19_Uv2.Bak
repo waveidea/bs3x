@@ -1,0 +1,161 @@
+### uVision2 Project, (C) Keil Software
+### Do not modify !
+
+Target (Target 1), 0x0000 // Tools: 'MCS-51'
+
+Group (Source Group 1)
+
+File 1,5,<..\..\common_z8_ez\ctrldef.h><ctrldef.h>
+File 1,2,<.\USBJmpTb.a51><USBJmpTb.a51>
+File 1,2,<.\dscr.a51><dscr.a51>
+File 1,1,<.\fw.c><fw.c>
+File 1,1,<.\hardware.c><hardware.c>
+File 1,1,<.\itr.c><itr.c>
+File 1,1,<.\main.c><main.c>
+File 1,1,<.\periph.c><periph.c>
+File 1,1,<.\serial.c><serial.c>
+File 1,1,<.\usb.c><usb.c>
+File 1,5,<..\..\common_z8_ez\common_z8_ez.h><common_z8_ez.h>
+File 1,4,<.\Ezusb.lib><Ezusb.lib>
+File 1,1,<.\bootloader.c><bootloader.c>
+File 1,2,<.\identity.asm><identity.asm>
+
+
+Options 1,0,0  // Target 'Target 1'
+ Device (EZ-USB (AN21XX))
+ Vendor (Cypress Semiconductor)
+ Cpu (IRAM(0-0xFF) XRAM(0-0x3FF) CLOCK(24000000) MODDP2)
+ FlashUt ()
+ StupF ("LIB\STARTUP.A51" ("Standard 8051 Startup Code"))
+ FlashDR ()
+ DevID ()
+ Rgf (REGAN21.H)
+ Mem ()
+ C ()
+ A ()
+ RL ()
+ OH ()
+ DBC_IFX ()
+ DBC_CMS ()
+ DBC_AMS ()
+ DBC_LMS ()
+ UseEnv=0
+ EnvBin (C:\Keil\C51\BIN\)
+ EnvInc ()
+ EnvLib ()
+ EnvReg ()
+ OrgReg (ÿCypress\)
+ TgStat=16
+ OutDir (.\)
+ OutName (ez_usb_v18)
+ GenApp=1
+ GenLib=0
+ GenHex=1
+ Debug=0
+ Browse=0
+ LstDir (.\)
+ HexSel=0
+ MG32K=0
+ TGMORE=0
+ RunUsr 0 1 <HEX2BIX.EXE -i -o ez_usb_v18_B2.iic ez_usb_v18.hex>
+ RunUsr 1 0 <clean_dir.bat>
+ BrunUsr 0 0 <>
+ BrunUsr 1 0 <>
+ CrunUsr 0 0 <>
+ CrunUsr 1 0 <>
+ SVCSID <>
+ MODEL5=0
+ RTOS5=0
+ ROMSZ5=2
+ DHOLD5=0
+ XHOLD5=0
+ T51FL=312
+ XT51FL=0
+ CBANKS5=0
+ XBANKS5=0
+ RCB51 { 0,0,0,0,0,255,255,0,0 }
+ RXB51 { 0,0,0,0,0,0,0,0,0 }
+ OCM51 { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 }
+ OCR51 { 0,0,32,0,0,255,7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 }
+ IRO51 { 0,0,0,0,0,0,0,0,0 }
+ IRA51 { 0,0,0,0,0,0,1,0,0 }
+ XRA51 { 0,0,0,0,0,0,4,0,0 }
+ XRA512 { 0,0,0,0,0,0,0,0,0 }
+ IROM512 { 0,0,0,0,0,0,0,0,0 }
+ C51FL=21651728
+ C51VA=0
+ C51MSC ()
+ C51DEF (EZ_COMPIL)
+ C51UDF ()
+ INCC5 (..\..\common_z8_ez)
+ AX51FL=4
+ AX51MSC ()
+ AX51SET ()
+ AX51RST ()
+ INCA5 (..\..\common_z8_ez)
+ PropFld { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 }
+ IncBld=1
+ AlwaysBuild=0
+ GenAsm=0
+ AsmAsm=0
+ PublicsOnly=0
+ StopCode=3
+ CustArgs ()
+ LibMods ()
+ BankNo=65535
+ LX51FL=288
+ LX51OVL ()
+ LX51MSC ()
+ LX51DWN ()
+ LX51LFI ()
+ LX51ASN ()
+ LX51RES ()
+ LX51CCL ()
+ LX51UCL ()
+ LX51CSC ()
+ LX51UCS ()
+ LX51COB (0x0000-0x1D40)
+ LX51XDB (0X2000-0X27FF)
+ LX51PDB ()
+ LX51BIB ()
+ LX51DAB ()
+ LX51IDB ()
+ LX51PRC ()
+ LX51STK ()
+ LX51COS ()
+ LX51XDS ()
+ LX51BIS ()
+ LX51DAS ()
+ LX51IDS ()
+  OPTDL (S8051.DLL)()(DP51.DLL)(-pAN21)(S8051.DLL)()(TP51.DLL)(-pAN21)
+  OPTDBG 501,0,()()()()()()()()()() (BIN\MON51.DLL)()()()
+ FLASH1 { 1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 }
+ FLASH2 (BIN\LPC2EMP.DLL)
+ FLASH3 ("" ())
+ FLASH4 ()
+EndOpt
+
+Options 1,1,0  // Group 'Source Group 1'
+ PropFld { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 }
+ IncBld=2
+ AlwaysBuild=2
+ GenAsm=2
+ AsmAsm=2
+ PublicsOnly=2
+ StopCode=11
+ CustArgs ()
+ LibMods ()
+ BankNo=65535
+ C51FL=177119914
+ C51VA=0
+ C51MSC ()
+ C51DEF ()
+ C51UDF ()
+ INCC5 (C:\backup_jd\midictrl\BSP_VERSION_2\firmware\common_z8_ez\)
+ AX51FL=42
+ AX51MSC ()
+ AX51SET ()
+ AX51RST ()
+ INCA5 ()
+EndOpt
+
